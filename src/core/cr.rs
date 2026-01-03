@@ -61,10 +61,9 @@ impl ClassReader {
 
             let cp_info_size: usize;
 
-            match class_file_buffer
+            match *class_file_buffer
                 .get(current_cp_info_offset)
                 .ok_or(ClassParseError::OutOfBounds)?
-                .to_owned()
             {
                 symbol::CONSTANT_FIELDREF_TAG
                 | symbol::CONSTANT_METHODREF_TAG
@@ -148,6 +147,15 @@ impl ClassReader {
 
     pub fn get_access(&self) -> Result<u16, ClassParseError> {
         read_unsigned_short(&self.class_file_buffer, self.header)
+    }
+
+    pub fn get_class_name(&mut self) -> Result<Option<String>, ClassParseError> {
+        read_class(
+            &self.class_file_buffer,
+            &mut self.constant_utf8_values,
+            &self.cp_info_offsets,
+            self.header + 2,
+        )
     }
 }
 
@@ -274,33 +282,43 @@ fn read_utf(
     cp_info_offsets: &[usize],
     constant_pool_entry_index: usize,
 ) -> Result<String, ClassParseError> {
-    // 1. Check the cache first.
+    // Check the cache first.
     if let Some(Some(value)) = constant_utf8_values.get(constant_pool_entry_index) {
         // The string is already in the cache, return a clone of it.
         return Ok(value.clone());
     }
 
-    // 2. The string is not in the cache, so we need to decode it.
+    // The string is not in the cache, so we need to decode it.
     // Get the offset of the CONSTANT_Utf8_info structure in the class file.
-    let cp_info_offset = *cp_info_offsets
-        .get(constant_pool_entry_index)
-        .ok_or(ClassParseError::InvalidConstantPoolIndex)?;
+    let cp_info_offset = *cp_info_offsets.get(constant_pool_entry_index).ok_or(
+        ClassParseError::InvalidConstantPoolIndex(constant_pool_entry_index),
+    )?;
+
+    // Check if the offset is valid. An offset of 0 indicates an unused slot
+    // (like the second part of a LONG or DOUBLE).
+    if cp_info_offset == 0 {
+        return Err(ClassParseError::InvalidConstantPoolIndex(
+            constant_pool_entry_index,
+        ));
+    }
 
     // The structure is: u1 tag, u2 length, u1[] bytes.
-    // We read the length from the `cp_info_offset`. The tag is assumed to be correct.
+    // We read the length from the `cp_info_offset - 1` because our offset points
+    // to the start of the info part, not the tag. Let's adjust this logic.
+    // In your parse function, `cpInfoOffsets[i] = currentCpInfoOffset + 1;`
+    // This means the offset points to the byte *after* the tag. So this is correct.
     let len = read_unsigned_short(buffer, cp_info_offset)? as usize;
+
     // The actual byte data starts 2 bytes after the offset (to skip the length field).
     let string_bytes_offset = cp_info_offset + 2;
 
     let value = read_utf_from_buffer(buffer, string_bytes_offset, len)?;
 
-    // 3. Store the newly decoded string in the cache.
-    if let Some(Some(cache_slot)) = constant_utf8_values.get_mut(constant_pool_entry_index) {
-        *cache_slot = value.clone();
-    } else {
-        // This would indicate a bug where the cache and offset vectors are out of sync.
-        return Err(ClassParseError::InvalidConstantPoolIndex);
-    }
+    let cache_slot = constant_utf8_values
+        .get_mut(constant_pool_entry_index)
+        .ok_or(ClassParseError::CacheOffsetMismatch)?; // This should ideally never happen
+
+    *cache_slot = Some(value.clone());
 
     Ok(value)
 }
@@ -347,6 +365,45 @@ pub fn read_int(buffer: &Bytes, offset: usize) -> Result<i32, ClassParseError> {
     Ok(i32::from_be_bytes(bytes_array))
 }
 
+pub fn read_class(
+    buffer: &Bytes,
+
+    constant_utf8_values: &mut [Option<String>],
+    cp_info_offsets: &[usize],
+    offset: usize,
+) -> Result<Option<String>, ClassParseError> {
+    read_stringish(buffer, constant_utf8_values, cp_info_offsets, offset)
+}
+
+pub fn read_stringish(
+    buffer: &Bytes,
+    constant_utf8_values: &mut [Option<String>],
+    cp_info_offsets: &[usize],
+    offset: usize,
+) -> Result<Option<String>, ClassParseError> {
+    let string_info_index = read_unsigned_short(buffer, offset)? as usize;
+
+    if string_info_index == 0 {
+        return Err(ClassParseError::InvalidConstantPoolIndex(string_info_index));
+    }
+
+    let utf8_info_offset = cp_info_offsets
+        .get(string_info_index)
+        .ok_or(ClassParseError::InvalidConstantPoolIndex(string_info_index))?
+        .to_owned();
+
+    if utf8_info_offset == 0 {
+        return Err(ClassParseError::InvalidConstantPoolIndex(string_info_index));
+    }
+
+    read_utf8(
+        buffer,
+        constant_utf8_values,
+        cp_info_offsets,
+        utf8_info_offset,
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ClassParseError {
     #[error("Unsupported class file major version {0}")]
@@ -358,14 +415,17 @@ pub enum ClassParseError {
     #[error("No bootstrap methods inside the class")]
     NoBootstrapMethods,
 
-    #[error("Invalid constant pool index")]
-    InvalidConstantPoolIndex,
+    #[error("Invalid constant pool index: {0}")]
+    InvalidConstantPoolIndex(usize),
 
     #[error("Out of bounds")]
     OutOfBounds,
 
     #[error("Invalid Utf8")]
     InvalidUtf8(#[from] FromUtf8Error),
+
+    #[error("Cache offset mismatch")]
+    CacheOffsetMismatch,
 }
 
 #[cfg(test)]
@@ -374,14 +434,27 @@ mod tests {
 
     use crate::core::{ClassReader, opcodes};
 
+    fn get_class_bytes() -> &'static [u8] {
+        let class_bytes = include_bytes!("../../resources/Main.class");
+        class_bytes
+    }
+
     #[test]
     fn recognise_access() {
-        let class_bytes = include_bytes!("../../resources/Main.class");
+        let class_bytes = get_class_bytes();
         let cr = ClassReader::parse(Bytes::from_static(class_bytes), 0, true).unwrap();
 
         assert_eq!(
             cr.get_access().unwrap(),
             opcodes::ACC_PUBLIC | opcodes::ACC_SUPER
         );
+    }
+
+    #[test]
+    fn recognise_class_name() {
+        let class_bytes = get_class_bytes();
+        let mut cr = ClassReader::parse(Bytes::from_static(class_bytes), 0, true).unwrap();
+
+        assert_eq!(cr.get_class_name().unwrap().unwrap(), "org/cubewhy/Main");
     }
 }
