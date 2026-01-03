@@ -157,6 +157,15 @@ impl ClassReader {
             self.header + 2,
         )
     }
+
+    pub fn get_super_name(&mut self) -> Result<Option<String>, ClassParseError> {
+        read_class(
+            &self.class_file_buffer,
+            &mut self.constant_utf8_values,
+            &self.cp_info_offsets,
+            self.header + 4,
+        )
+    }
 }
 
 fn read_short(buffer: &Bytes, offset: usize) -> Result<i16, ClassParseError> {
@@ -456,5 +465,13 @@ mod tests {
         let mut cr = ClassReader::parse(Bytes::from_static(class_bytes), 0, true).unwrap();
 
         assert_eq!(cr.get_class_name().unwrap().unwrap(), "org/cubewhy/Main");
+    }
+
+    #[test]
+    fn recognise_super_name() {
+        let class_bytes = get_class_bytes();
+        let mut cr = ClassReader::parse(Bytes::from_static(class_bytes), 0, true).unwrap();
+
+        assert_eq!(cr.get_super_name().unwrap().unwrap(), "java/lang/Object");
     }
 }
