@@ -166,6 +166,25 @@ impl ClassReader {
             self.header + 4,
         )
     }
+
+    pub fn get_interfaces(&mut self) -> Result<Vec<Option<String>>, ClassParseError> {
+        let mut current_offset = self.header + 6; // skip class name, super name
+        let interfaces_count = read_unsigned_short(&self.class_file_buffer, current_offset)?;
+        let mut interfaces = Vec::with_capacity(interfaces_count as usize);
+        if interfaces_count > 0 {
+            for _ in 0..interfaces_count {
+                current_offset += 2;
+                interfaces.push(read_class(
+                    &self.class_file_buffer,
+                    &mut self.constant_utf8_values,
+                    &self.cp_info_offsets,
+                    current_offset,
+                )?);
+            }
+        }
+
+        Ok(interfaces)
+    }
 }
 
 fn read_short(buffer: &Bytes, offset: usize) -> Result<i16, ClassParseError> {
@@ -473,5 +492,19 @@ mod tests {
         let mut cr = ClassReader::parse(Bytes::from_static(class_bytes), 0, true).unwrap();
 
         assert_eq!(cr.get_super_name().unwrap().unwrap(), "java/lang/Object");
+    }
+
+    #[test]
+    fn recognise_interfaces() {
+        let class_bytes = get_class_bytes();
+        let mut cr = ClassReader::parse(Bytes::from_static(class_bytes), 0, true).unwrap();
+
+        assert_eq!(
+            cr.get_interfaces().unwrap(),
+            vec![
+                Some("java/lang/Runnable".to_string()),
+                Some("java/io/Serializable".to_string()),
+            ]
+        );
     }
 }
