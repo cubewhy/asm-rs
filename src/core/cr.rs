@@ -375,7 +375,7 @@ mod tests {
     use crate::core::{ClassReader, opcodes};
 
     #[test]
-    fn recognoise_access() {
+    fn recognise_access() {
         let class_bytes = include_bytes!("../../resources/Main.class");
         let cr = ClassReader::parse(Bytes::from_static(class_bytes), 0, true).unwrap();
 
