@@ -1,5 +1,6 @@
 [package]
 name = "asm-rs"
+description = "ObjectWeb ASM implemented in Rust"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
