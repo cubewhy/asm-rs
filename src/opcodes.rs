@@ -206,6 +206,9 @@ pub const BREAKPOINT: u8 = 0xCA;
 pub const IMPDEP1: u8 = 0xFE;
 pub const IMPDEP2: u8 = 0xFF;
 pub const NUMBER_OF_JAVA_CODES: u8 = BREAKPOINT + 1;
+
+// Internal hotspot opcode
+// https://github.com/openjdk/jdk/blob/759fe58877ac75a9157e831cc5e54aaa70250223/src/hotspot/share/interpreter/bytecodes.hpp#L250
 pub const FAST_AGETFIELD: u8 = NUMBER_OF_JAVA_CODES;
 pub const FAST_BGETFIELD: u8 = FAST_AGETFIELD + 1;
 pub const FAST_CGETFIELD: u8 = FAST_BGETFIELD + 1;
