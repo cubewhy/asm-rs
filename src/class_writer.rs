@@ -11,7 +11,7 @@ use crate::insn::{
     LabelNode, LdcInsnNode, LdcValue, LineNumberInsnNode, MemberRef, MethodInsnNode, NodeList,
     VarInsnNode,
 };
-use crate::nodes::{ClassNode, FieldNode, MethodNode};
+use crate::nodes::{ClassNode, FieldNode, InnerClassNode, MethodNode};
 use crate::opcodes;
 
 /// Flag to automatically compute the stack map frames.
@@ -286,6 +286,45 @@ impl ClassWriter {
         self
     }
 
+    /// Adds an `InnerClasses` entry for this class.
+    ///
+    /// This encodes the entry into the `InnerClasses` attribute using constant pool indices.
+    pub fn visit_inner_class(
+        &mut self,
+        name: &str,
+        outer_name: Option<&str>,
+        inner_name: Option<&str>,
+        access_flags: u16,
+    ) -> &mut Self {
+        let inner_class_info_index = self.cp.class(name);
+        let outer_class_info_index = match outer_name {
+            Some(value) => self.cp.class(value),
+            None => 0,
+        };
+        let inner_name_index = match inner_name {
+            Some(value) => self.cp.utf8(value),
+            None => 0,
+        };
+        let entry = InnerClass {
+            inner_class_info_index,
+            outer_class_info_index,
+            inner_name_index,
+            inner_class_access_flags: access_flags,
+        };
+
+        for attr in &mut self.attributes {
+            if let AttributeInfo::InnerClasses { classes } = attr {
+                classes.push(entry);
+                return self;
+            }
+        }
+
+        self.attributes.push(AttributeInfo::InnerClasses {
+            classes: vec![entry],
+        });
+        self
+    }
+
     /// Visits a method of the class.
     ///
     /// Returns a `MethodVisitor` that should be used to define the method body.
@@ -365,11 +404,73 @@ impl ClassWriter {
             });
         }
 
+        let constant_pool = self.cp.into_pool();
+
+        fn cp_utf8<'a>(cp: &'a [CpInfo], index: u16) -> Result<&'a str, String> {
+            match cp.get(index as usize) {
+                Some(CpInfo::Utf8(value)) => Ok(value.as_str()),
+                _ => Err(format!("invalid constant pool utf8 index {}", index)),
+            }
+        }
+        fn class_name<'a>(cp: &'a [CpInfo], index: u16) -> Result<&'a str, String> {
+            match cp.get(index as usize) {
+                Some(CpInfo::Class { name_index }) => cp_utf8(cp, *name_index),
+                _ => Err(format!("invalid constant pool class index {}", index)),
+            }
+        }
+
+        let mut inner_classes = Vec::new();
+        for attr in &self.attributes {
+            if let AttributeInfo::InnerClasses { classes } = attr {
+                for entry in classes {
+                    let name = class_name(&constant_pool, entry.inner_class_info_index)?.to_string();
+                    let outer_name = if entry.outer_class_info_index == 0 {
+                        None
+                    } else {
+                        Some(class_name(&constant_pool, entry.outer_class_info_index)?.to_string())
+                    };
+                    let inner_name = if entry.inner_name_index == 0 {
+                        None
+                    } else {
+                        Some(cp_utf8(&constant_pool, entry.inner_name_index)?.to_string())
+                    };
+                    inner_classes.push(InnerClassNode {
+                        name,
+                        outer_name,
+                        inner_name,
+                        access_flags: entry.inner_class_access_flags,
+                    });
+                }
+            }
+        }
+
+        let mut outer_class = String::new();
+        if let Some(class_index) = self.attributes.iter().find_map(|attr| match attr {
+            AttributeInfo::EnclosingMethod { class_index, .. } => Some(*class_index),
+            _ => None,
+        }) {
+            outer_class = class_name(&constant_pool, class_index)?.to_string();
+        }
+        if outer_class.is_empty() {
+            for attr in &self.attributes {
+                if let AttributeInfo::InnerClasses { classes } = attr {
+                    if let Some(entry) = classes.iter().find(|entry| {
+                        entry.inner_class_info_index == this_class
+                            && entry.outer_class_info_index != 0
+                    }) {
+                        outer_class =
+                            class_name(&constant_pool, entry.outer_class_info_index)?.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+
         Ok(ClassNode {
             minor_version: self.minor_version,
             major_version: self.major_version,
             access_flags: self.access_flags,
-            constant_pool: self.cp.into_pool(),
+            constant_pool,
             this_class,
             name: self.name,
             super_name: self.super_name,
@@ -379,6 +480,8 @@ impl ClassWriter {
             fields,
             methods,
             attributes: self.attributes,
+            inner_classes,
+            outer_class,
         })
     }
 

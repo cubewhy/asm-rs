@@ -420,6 +420,52 @@ impl ClassFile {
             });
         }
 
+        let mut inner_classes = Vec::new();
+        for attr in &self.attributes {
+            if let AttributeInfo::InnerClasses { classes } = attr {
+                for entry in classes {
+                    let name = self.class_name(entry.inner_class_info_index)?.to_string();
+                    let outer_name = if entry.outer_class_info_index == 0 {
+                        None
+                    } else {
+                        Some(self.class_name(entry.outer_class_info_index)?.to_string())
+                    };
+                    let inner_name = if entry.inner_name_index == 0 {
+                        None
+                    } else {
+                        Some(self.cp_utf8(entry.inner_name_index)?.to_string())
+                    };
+                    inner_classes.push(crate::nodes::InnerClassNode {
+                        name,
+                        outer_name,
+                        inner_name,
+                        access_flags: entry.inner_class_access_flags,
+                    });
+                }
+            }
+        }
+
+        let mut outer_class = String::new();
+        if let Some(class_index) = self.attributes.iter().find_map(|attr| match attr {
+            AttributeInfo::EnclosingMethod { class_index, .. } => Some(*class_index),
+            _ => None,
+        }) {
+            outer_class = self.class_name(class_index)?.to_string();
+        }
+        if outer_class.is_empty() {
+            for attr in &self.attributes {
+                if let AttributeInfo::InnerClasses { classes } = attr {
+                    if let Some(entry) = classes.iter().find(|entry| {
+                        entry.inner_class_info_index == self.this_class
+                            && entry.outer_class_info_index != 0
+                    }) {
+                        outer_class = self.class_name(entry.outer_class_info_index)?.to_string();
+                        break;
+                    }
+                }
+            }
+        }
+
         Ok(crate::nodes::ClassNode {
             minor_version: self.minor_version,
             major_version: self.major_version,
@@ -434,6 +480,8 @@ impl ClassFile {
             fields,
             methods,
             attributes: self.attributes.clone(),
+            inner_classes,
+            outer_class,
         })
     }
 }

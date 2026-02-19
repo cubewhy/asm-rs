@@ -50,6 +50,32 @@ pub struct ClassNode {
 
     /// Global attributes associated with the class (e.g., `SourceFile`, `InnerClasses`, `EnclosingMethod`).
     pub attributes: Vec<AttributeInfo>,
+
+    /// The inner class entries associated with this class file.
+    ///
+    /// This is a decoded view of the `InnerClasses` attribute.
+    pub inner_classes: Vec<InnerClassNode>,
+
+    /// The internal name of the enclosing class, if known.
+    ///
+    /// This value is empty when no enclosing class information is available.
+    pub outer_class: String,
+}
+
+/// Represents an inner class entry in the `InnerClasses` attribute.
+#[derive(Debug, Clone)]
+pub struct InnerClassNode {
+    /// The internal name of the inner class (e.g., `a/b/Outer$Inner`).
+    pub name: String,
+
+    /// The internal name of the enclosing class, if any.
+    pub outer_name: Option<String>,
+
+    /// The simple (unqualified) name of the inner class, if any.
+    pub inner_name: Option<String>,
+
+    /// The access flags of the inner class as declared in source.
+    pub access_flags: u16,
 }
 
 /// Represents a field (member variable) within a class.
