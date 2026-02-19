@@ -1369,9 +1369,10 @@ fn write_constant_pool(out: &mut Vec<u8>, cp: &[CpInfo]) -> Result<(), ClassWrit
         match entry {
             CpInfo::Unusable => {}
             CpInfo::Utf8(value) => {
+                let bytes = encode_modified_utf8(value);
                 write_u1(out, 1);
-                write_u2(out, value.len() as u16);
-                out.extend_from_slice(value.as_bytes());
+                write_u2(out, bytes.len() as u16);
+                out.extend_from_slice(&bytes);
             }
             CpInfo::Integer(value) => {
                 write_u1(out, 3);
@@ -1468,6 +1469,36 @@ fn write_constant_pool(out: &mut Vec<u8>, cp: &[CpInfo]) -> Result<(), ClassWrit
         }
     }
     Ok(())
+}
+
+fn encode_modified_utf8(value: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    for ch in value.chars() {
+        let code = ch as u32;
+        if code == 0 {
+            out.push(0xC0);
+            out.push(0x80);
+        } else if code <= 0x7F {
+            out.push(code as u8);
+        } else if code <= 0x7FF {
+            out.push((0xC0 | ((code >> 6) & 0x1F)) as u8);
+            out.push((0x80 | (code & 0x3F)) as u8);
+        } else if code <= 0xFFFF {
+            out.push((0xE0 | ((code >> 12) & 0x0F)) as u8);
+            out.push((0x80 | ((code >> 6) & 0x3F)) as u8);
+            out.push((0x80 | (code & 0x3F)) as u8);
+        } else {
+            let u = code - 0x10000;
+            let high = 0xD800 + ((u >> 10) & 0x3FF);
+            let low = 0xDC00 + (u & 0x3FF);
+            for cu in [high, low] {
+                out.push((0xE0 | ((cu >> 12) & 0x0F)) as u8);
+                out.push((0x80 | ((cu >> 6) & 0x3F)) as u8);
+                out.push((0x80 | (cu & 0x3F)) as u8);
+            }
+        }
+    }
+    out
 }
 
 fn ensure_utf8(cp: &mut Vec<CpInfo>, value: &str) -> u16 {
@@ -2458,15 +2489,15 @@ fn execute_instruction(
         opcodes::POP2 => {
             let v1 = pop(&mut stack)?;
             if is_category2(&v1) {
-                return Err(ClassWriteError::FrameComputation(
-                    "pop2 category2".to_string(),
-                ));
-            }
-            let v2 = pop(&mut stack)?;
-            if is_category2(&v2) {
-                return Err(ClassWriteError::FrameComputation(
-                    "pop2 invalid".to_string(),
-                ));
+                // Form 2: ..., value2(cat2) -> ...
+                // already popped
+            } else {
+                let v2 = pop(&mut stack)?;
+                if is_category2(&v2) {
+                    return Err(ClassWriteError::FrameComputation(
+                        "pop2 invalid".to_string(),
+                    ));
+                }
             }
         }
         opcodes::DUP => {
@@ -2491,15 +2522,23 @@ fn execute_instruction(
         }
         opcodes::DUP_X2 => {
             let v1 = pop(&mut stack)?;
-            let v2 = pop(&mut stack)?;
-            let v3 = pop(&mut stack)?;
-            if is_category2(&v1) || is_category2(&v2) {
+            if is_category2(&v1) {
                 return Err(ClassWriteError::FrameComputation("dup_x2".to_string()));
             }
-            stack.push(v1.clone());
-            stack.push(v3);
-            stack.push(v2);
-            stack.push(v1);
+            let v2 = pop(&mut stack)?;
+            if is_category2(&v2) {
+                // Form 2: ..., v2(cat2), v1(cat1) -> ..., v1, v2, v1
+                stack.push(v1.clone());
+                stack.push(v2);
+                stack.push(v1);
+            } else {
+                // Form 1/3: ..., v3(cat1|cat2), v2(cat1), v1(cat1) -> ..., v1, v3, v2, v1
+                let v3 = pop(&mut stack)?;
+                stack.push(v1.clone());
+                stack.push(v3);
+                stack.push(v2);
+                stack.push(v1);
+            }
         }
         opcodes::DUP2 => {
             let v1 = pop(&mut stack)?;
