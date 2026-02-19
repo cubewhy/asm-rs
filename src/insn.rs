@@ -5,6 +5,12 @@ pub struct InsnNode {
     pub opcode: u8,
 }
 
+impl From<u8> for InsnNode {
+    fn from(value: u8) -> Self {
+        Self { opcode: value }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IntInsnNode {
     pub insn: InsnNode,
