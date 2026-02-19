@@ -173,7 +173,7 @@ struct MethodData {
 /// # Example
 ///
 /// ```rust
-/// use crate::{ClassWriter, COMPUTE_FRAMES, opcodes};
+/// use rust_asm::{class_writer::{ClassWriter, COMPUTE_FRAMES}, opcodes};
 ///
 /// let mut cw = ClassWriter::new(COMPUTE_FRAMES);
 /// cw.visit(52, 0, 1, "com/example/MyClass", Some("java/lang/Object"), &[]);
