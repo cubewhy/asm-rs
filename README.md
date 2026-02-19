@@ -21,6 +21,10 @@ rust-asm = "<version>"
 - 1:1 (almost) ASM API
 - Frame compute support
 
+## Documentation
+
+[rust-asm at docs.rs](https://docs.rs/rust-asm)
+
 ## Thanks
 
 - [XNLawa](https://github.com/XNLawa/) for class-writer implementation
