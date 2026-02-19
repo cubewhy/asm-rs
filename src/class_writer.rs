@@ -1289,16 +1289,18 @@ fn resolve_ldc(node: LdcInsnNode, cp: &mut ConstantPoolBuilder) -> (u8, u16, Ldc
     }
 }
 
-struct ClassFileWriter {
+pub struct ClassFileWriter {
     options: u32,
 }
 
 impl ClassFileWriter {
-    fn new(options: u32) -> Self {
-        Self { options }
+    pub fn new(compute_frames_options: u32) -> Self {
+        Self {
+            options: compute_frames_options,
+        }
     }
 
-    fn to_bytes(&self, class_node: &ClassNode) -> Result<Vec<u8>, ClassWriteError> {
+    pub fn to_bytes(&self, class_node: &ClassNode) -> Result<Vec<u8>, ClassWriteError> {
         if class_node.constant_pool.is_empty() {
             return Err(ClassWriteError::MissingConstantPool);
         }
