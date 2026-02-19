@@ -1650,25 +1650,25 @@ fn visit_instruction(
     Ok(())
 }
 
-struct ByteReader<'a> {
+pub struct ByteReader<'a> {
     data: &'a [u8],
     pos: usize,
 }
 
 impl<'a> ByteReader<'a> {
-    fn new(data: &'a [u8]) -> Self {
+    pub fn new(data: &'a [u8]) -> Self {
         Self { data, pos: 0 }
     }
 
-    fn remaining(&self) -> usize {
+    pub fn remaining(&self) -> usize {
         self.data.len().saturating_sub(self.pos)
     }
 
-    fn pos(&self) -> usize {
+    pub fn pos(&self) -> usize {
         self.pos
     }
 
-    fn align4(&mut self, opcode_offset: usize) -> Result<(), ClassReadError> {
+    pub fn align4(&mut self, opcode_offset: usize) -> Result<(), ClassReadError> {
         let mut padding = (4 - ((opcode_offset + 1) % 4)) % 4;
         while padding > 0 {
             self.read_u1()?;
@@ -1677,7 +1677,7 @@ impl<'a> ByteReader<'a> {
         Ok(())
     }
 
-    fn read_u1(&mut self) -> Result<u8, ClassReadError> {
+    pub fn read_u1(&mut self) -> Result<u8, ClassReadError> {
         if self.pos >= self.data.len() {
             return Err(ClassReadError::UnexpectedEof);
         }
@@ -1686,37 +1686,37 @@ impl<'a> ByteReader<'a> {
         Ok(value)
     }
 
-    fn read_i1(&mut self) -> Result<i8, ClassReadError> {
+    pub fn read_i1(&mut self) -> Result<i8, ClassReadError> {
         Ok(self.read_u1()? as i8)
     }
 
-    fn read_u2(&mut self) -> Result<u16, ClassReadError> {
+    pub fn read_u2(&mut self) -> Result<u16, ClassReadError> {
         let bytes = self.read_bytes(2)?;
         Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
     }
 
-    fn read_i2(&mut self) -> Result<i16, ClassReadError> {
+    pub fn read_i2(&mut self) -> Result<i16, ClassReadError> {
         Ok(self.read_u2()? as i16)
     }
 
-    fn read_u4(&mut self) -> Result<u32, ClassReadError> {
+    pub fn read_u4(&mut self) -> Result<u32, ClassReadError> {
         let bytes = self.read_bytes(4)?;
         Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    fn read_i4(&mut self) -> Result<i32, ClassReadError> {
+    pub fn read_i4(&mut self) -> Result<i32, ClassReadError> {
         let bytes = self.read_bytes(4)?;
         Ok(i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
-    fn read_u8(&mut self) -> Result<u64, ClassReadError> {
+    pub fn read_u8(&mut self) -> Result<u64, ClassReadError> {
         let bytes = self.read_bytes(8)?;
         Ok(u64::from_be_bytes([
             bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
         ]))
     }
 
-    fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>, ClassReadError> {
+    pub fn read_bytes(&mut self, len: usize) -> Result<Vec<u8>, ClassReadError> {
         if self.pos + len > self.data.len() {
             return Err(ClassReadError::UnexpectedEof);
         }
