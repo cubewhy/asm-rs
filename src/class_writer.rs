@@ -7,9 +7,9 @@ use crate::class_reader::{
 use crate::constants;
 use crate::error::ClassWriteError;
 use crate::insn::{
-    AbstractInsnNode, FieldInsnNode, Insn, InsnNode, JumpInsnNode, JumpLabelInsnNode, Label,
-    LabelNode, LdcInsnNode, LdcValue, LineNumberInsnNode, MemberRef, MethodInsnNode, NodeList,
-    VarInsnNode,
+    AbstractInsnNode, FieldInsnNode, Insn, InsnList, InsnNode, JumpInsnNode, JumpLabelInsnNode,
+    Label, LabelNode, LdcInsnNode, LdcValue, LineNumberInsnNode, MemberRef, MethodInsnNode,
+    NodeList, VarInsnNode,
 };
 use crate::nodes::{ClassNode, FieldNode, InnerClassNode, MethodNode};
 use crate::opcodes;
@@ -184,7 +184,12 @@ struct MethodData {
     access_flags: u16,
     name: String,
     descriptor: String,
-    code: Option<CodeAttribute>,
+    has_code: bool,
+    max_stack: u16,
+    max_locals: u16,
+    instructions: InsnList,
+    exception_table: Vec<ExceptionTableEntry>,
+    code_attributes: Vec<AttributeInfo>,
     attributes: Vec<AttributeInfo>,
 }
 
@@ -382,15 +387,16 @@ impl ClassWriter {
 
         let mut methods = Vec::with_capacity(self.methods.len());
         for method in self.methods {
-            let name_index = self.cp.utf8(&method.name);
-            let descriptor_index = self.cp.utf8(&method.descriptor);
             methods.push(MethodNode {
                 access_flags: method.access_flags,
-                name_index,
-                descriptor_index,
                 name: method.name,
                 descriptor: method.descriptor,
-                code: method.code,
+                has_code: method.has_code,
+                max_stack: method.max_stack,
+                max_locals: method.max_locals,
+                instructions: method.instructions,
+                exception_table: method.exception_table,
+                code_attributes: method.code_attributes,
                 attributes: method.attributes,
             });
         }
@@ -635,11 +641,54 @@ impl MethodVisitor {
         } else {
             None
         };
+        let (
+            has_code,
+            max_stack,
+            max_locals,
+            instructions,
+            exception_table,
+            code_attributes,
+        ) = if let Some(code) = code {
+            let CodeAttribute {
+                max_stack,
+                max_locals,
+                instructions,
+                exception_table,
+                attributes,
+                ..
+            } = code;
+            let mut list = InsnList::new();
+            for insn in instructions {
+                list.add(insn);
+            }
+            (
+                true,
+                max_stack,
+                max_locals,
+                list,
+                exception_table,
+                attributes,
+            )
+        } else {
+            (
+                false,
+                0,
+                0,
+                InsnList::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        };
         class.methods.push(MethodData {
             access_flags: self.access_flags,
             name: self.name,
             descriptor: self.descriptor,
-            code,
+            has_code,
+            max_stack,
+            max_locals,
+            instructions,
+            exception_table,
+            code_attributes,
             attributes: std::mem::take(&mut self.attributes),
         });
     }
@@ -862,6 +911,156 @@ fn build_code_attribute(
         attributes,
     }
     .build(cp)
+}
+
+fn build_code_from_insn_list(insns: &InsnList) -> Result<(Vec<u8>, Vec<Insn>), ClassWriteError> {
+    let mut code = Vec::new();
+    let mut instructions = Vec::with_capacity(insns.insns().len());
+    for insn in insns.insns() {
+        let emitted = emit_insn_raw(&mut code, insn.clone())?;
+        instructions.push(emitted);
+    }
+    Ok((code, instructions))
+}
+
+fn emit_insn_raw(code: &mut Vec<u8>, insn: Insn) -> Result<Insn, ClassWriteError> {
+    let offset = code.len();
+    let out = match insn {
+        Insn::Simple(node) => {
+            code.push(node.opcode);
+            Insn::Simple(node)
+        }
+        Insn::Int(node) => {
+            code.push(node.insn.opcode);
+            match node.insn.opcode {
+                opcodes::BIPUSH => write_i1(code, node.operand as i8),
+                opcodes::SIPUSH => write_i2(code, node.operand as i16),
+                opcodes::NEWARRAY => write_u1(code, node.operand as u8),
+                _ => write_i1(code, node.operand as i8),
+            }
+            Insn::Int(node)
+        }
+        Insn::Var(node) => {
+            code.push(node.insn.opcode);
+            write_u1(code, node.var_index as u8);
+            Insn::Var(node)
+        }
+        Insn::Type(node) => {
+            code.push(node.insn.opcode);
+            write_u2(code, node.type_index);
+            Insn::Type(node)
+        }
+        Insn::Field(node) => {
+            let index = match node.field_ref {
+                MemberRef::Index(index) => index,
+                MemberRef::Symbolic { .. } => {
+                    return Err(ClassWriteError::FrameComputation(
+                        "symbolic field ref in method instructions".to_string(),
+                    ));
+                }
+            };
+            code.push(node.insn.opcode);
+            write_u2(code, index);
+            Insn::Field(node)
+        }
+        Insn::Method(node) => {
+            let index = match node.method_ref {
+                MemberRef::Index(index) => index,
+                MemberRef::Symbolic { .. } => {
+                    return Err(ClassWriteError::FrameComputation(
+                        "symbolic method ref in method instructions".to_string(),
+                    ));
+                }
+            };
+            code.push(node.insn.opcode);
+            write_u2(code, index);
+            Insn::Method(node)
+        }
+        Insn::InvokeInterface(node) => {
+            code.push(node.insn.opcode);
+            write_u2(code, node.method_index);
+            write_u1(code, node.count);
+            write_u1(code, 0);
+            Insn::InvokeInterface(node)
+        }
+        Insn::InvokeDynamic(node) => {
+            code.push(node.insn.opcode);
+            write_u2(code, node.method_index);
+            write_u2(code, 0);
+            Insn::InvokeDynamic(node)
+        }
+        Insn::Jump(node) => {
+            code.push(node.insn.opcode);
+            match node.insn.opcode {
+                opcodes::GOTO_W | opcodes::JSR_W => write_i4(code, node.offset),
+                _ => write_i2(code, node.offset as i16),
+            }
+            Insn::Jump(node)
+        }
+        Insn::Ldc(node) => {
+            let index = match node.value {
+                LdcValue::Index(index) => index,
+                _ => {
+                    return Err(ClassWriteError::FrameComputation(
+                        "non-index ldc in method instructions".to_string(),
+                    ));
+                }
+            };
+            let opcode = if matches!(node.insn.opcode, opcodes::LDC | opcodes::LDC_W | opcodes::LDC2_W)
+            {
+                node.insn.opcode
+            } else if index <= 0xFF {
+                opcodes::LDC
+            } else {
+                opcodes::LDC_W
+            };
+            code.push(opcode);
+            if opcode == opcodes::LDC {
+                write_u1(code, index as u8);
+            } else {
+                write_u2(code, index);
+            }
+            Insn::Ldc(LdcInsnNode {
+                insn: opcode.into(),
+                value: LdcValue::Index(index),
+            })
+        }
+        Insn::Iinc(node) => {
+            code.push(node.insn.opcode);
+            write_u1(code, node.var_index as u8);
+            write_i1(code, node.increment as i8);
+            Insn::Iinc(node)
+        }
+        Insn::TableSwitch(node) => {
+            code.push(node.insn.opcode);
+            write_switch_padding(code, offset);
+            write_i4(code, node.default_offset);
+            write_i4(code, node.low);
+            write_i4(code, node.high);
+            for value in &node.offsets {
+                write_i4(code, *value);
+            }
+            Insn::TableSwitch(node)
+        }
+        Insn::LookupSwitch(node) => {
+            code.push(node.insn.opcode);
+            write_switch_padding(code, offset);
+            write_i4(code, node.default_offset);
+            write_i4(code, node.pairs.len() as i32);
+            for (key, value) in &node.pairs {
+                write_i4(code, *key);
+                write_i4(code, *value);
+            }
+            Insn::LookupSwitch(node)
+        }
+        Insn::MultiANewArray(node) => {
+            code.push(node.insn.opcode);
+            write_u2(code, node.type_index);
+            write_u1(code, node.dimensions);
+            Insn::MultiANewArray(node)
+        }
+    };
+    Ok(out)
 }
 
 fn emit_insn(code: &mut Vec<u8>, insn: Insn, cp: &mut ConstantPoolBuilder) -> Insn {
@@ -1137,13 +1336,17 @@ impl ClassFileWriter {
         }
         for method in &class_node.methods {
             collect_attribute_names(&method.attributes, &mut attribute_names);
-            if let Some(code) = &method.code {
+            if method.has_code {
                 attribute_names.push("Code".to_string());
-                collect_attribute_names(&code.attributes, &mut attribute_names);
+                collect_attribute_names(&method.code_attributes, &mut attribute_names);
             }
         }
         for name in attribute_names {
             ensure_utf8(&mut cp, &name);
+        }
+        for method in &class_node.methods {
+            ensure_utf8(&mut cp, &method.name);
+            ensure_utf8(&mut cp, &method.descriptor);
         }
 
         let mut precomputed_stack_maps: Vec<Option<Vec<StackMapFrame>>> =
@@ -1155,15 +1358,16 @@ impl ClassFileWriter {
         if compute_frames {
             ensure_utf8(&mut cp, "StackMapTable");
             for method in &class_node.methods {
-                if let Some(code) = &method.code {
+                if method.has_code {
+                    let code = method_code_attribute(method)?;
                     let maxs = if compute_maxs_flag {
-                        Some(compute_maxs(method, class_node, code, &cp)?)
+                        Some(compute_maxs(method, class_node, &code, &cp)?)
                     } else {
                         None
                     };
                     let max_locals = maxs.map(|item| item.1).unwrap_or(code.max_locals);
                     let stack_map =
-                        compute_stack_map_table(method, class_node, code, &mut cp, max_locals)?;
+                        compute_stack_map_table(method, class_node, &code, &mut cp, max_locals)?;
                     precomputed_stack_maps.push(Some(stack_map));
                     precomputed_maxs.push(maxs);
                 } else {
@@ -1173,8 +1377,9 @@ impl ClassFileWriter {
             }
         } else if compute_maxs_flag {
             for method in &class_node.methods {
-                if let Some(code) = &method.code {
-                    precomputed_maxs.push(Some(compute_maxs(method, class_node, code, &cp)?));
+                if method.has_code {
+                    let code = method_code_attribute(method)?;
+                    precomputed_maxs.push(Some(compute_maxs(method, class_node, &code, &cp)?));
                 } else {
                     precomputed_maxs.push(None);
                 }
@@ -1253,14 +1458,17 @@ fn write_method(
     precomputed_stack_map: Option<&Vec<StackMapFrame>>,
     precomputed_maxs: Option<(u16, u16)>,
 ) -> Result<(), ClassWriteError> {
+    let name_index = ensure_utf8(cp, &method.name);
+    let descriptor_index = ensure_utf8(cp, &method.descriptor);
     write_u2(out, method.access_flags);
-    write_u2(out, method.name_index);
-    write_u2(out, method.descriptor_index);
+    write_u2(out, name_index);
+    write_u2(out, descriptor_index);
 
     let mut attributes = method.attributes.clone();
-    if let Some(code) = &method.code {
+    if method.has_code {
+        let code = method_code_attribute(method)?;
         attributes.retain(|attr| !matches!(attr, AttributeInfo::Code(_)));
-        attributes.push(AttributeInfo::Code(code.clone()));
+        attributes.push(AttributeInfo::Code(code));
     }
 
     write_u2(out, attributes.len() as u16);
@@ -1276,6 +1484,20 @@ fn write_method(
         )?;
     }
     Ok(())
+}
+
+fn method_code_attribute(method: &MethodNode) -> Result<CodeAttribute, ClassWriteError> {
+    let (code, instructions) = build_code_from_insn_list(&method.instructions)?;
+    Ok(CodeAttribute {
+        max_stack: method.max_stack,
+        max_locals: method.max_locals,
+        code,
+        instructions,
+        insn_nodes: Vec::new(),
+        exception_table: method.exception_table.clone(),
+        try_catch_blocks: Vec::new(),
+        attributes: method.code_attributes.clone(),
+    })
 }
 
 fn write_attribute(

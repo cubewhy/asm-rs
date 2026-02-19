@@ -1,6 +1,6 @@
 use crate::error::ClassReadError;
 use crate::insn::{
-    AbstractInsnNode, FieldInsnNode, IincInsnNode, Insn, InsnNode, IntInsnNode,
+    AbstractInsnNode, FieldInsnNode, IincInsnNode, Insn, InsnList, InsnNode, IntInsnNode,
     InvokeDynamicInsnNode, InvokeInterfaceInsnNode, JumpInsnNode, LabelNode, LdcInsnNode, LdcValue,
     LookupSwitchInsnNode, MemberRef, MethodInsnNode, MultiANewArrayInsnNode, TableSwitchInsnNode,
     TryCatchBlockNode, TypeInsnNode, VarInsnNode,
@@ -405,18 +405,49 @@ impl ClassFile {
         for method in &self.methods {
             let name = self.cp_utf8(method.name_index)?.to_string();
             let descriptor = self.cp_utf8(method.descriptor_index)?.to_string();
+            let mut method_attributes = method.attributes.clone();
+            method_attributes.retain(|attr| !matches!(attr, AttributeInfo::Code(_)));
             let code = method.attributes.iter().find_map(|attr| match attr {
-                AttributeInfo::Code(code) => Some(code.clone()),
+                AttributeInfo::Code(code) => Some(code),
                 _ => None,
             });
+
+            let (has_code, max_stack, max_locals, instructions, exception_table, code_attributes) =
+                if let Some(code) = code {
+                    let mut list = InsnList::new();
+                    for insn in &code.instructions {
+                        list.add(insn.clone());
+                    }
+                    (
+                        true,
+                        code.max_stack,
+                        code.max_locals,
+                        list,
+                        code.exception_table.clone(),
+                        code.attributes.clone(),
+                    )
+                } else {
+                    (
+                        false,
+                        0,
+                        0,
+                        InsnList::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                };
+
             methods.push(crate::nodes::MethodNode {
                 access_flags: method.access_flags,
-                name_index: method.name_index,
-                descriptor_index: method.descriptor_index,
                 name,
                 descriptor,
-                code,
-                attributes: method.attributes.clone(),
+                has_code,
+                max_stack,
+                max_locals,
+                instructions,
+                exception_table,
+                code_attributes,
+                attributes: method_attributes,
             });
         }
 

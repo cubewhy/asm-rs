@@ -1,4 +1,5 @@
-use crate::class_reader::{AttributeInfo, CodeAttribute, CpInfo};
+use crate::class_reader::{AttributeInfo, CpInfo, ExceptionTableEntry};
+use crate::insn::InsnList;
 
 /// Represents a parsed Java Class File.
 ///
@@ -62,6 +63,28 @@ pub struct ClassNode {
     pub outer_class: String,
 }
 
+impl ClassNode {
+    pub fn new() -> Self {
+        Self {
+            minor_version: 0,
+            major_version: 0,
+            access_flags: 0,
+            constant_pool: Vec::new(),
+            this_class: 0,
+            name: String::new(),
+            super_name: None,
+            source_file: None,
+            interfaces: Vec::new(),
+            interface_indices: Vec::new(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+            attributes: Vec::new(),
+            inner_classes: Vec::new(),
+            outer_class: String::new(),
+        }
+    }
+}
+
 /// Represents an inner class entry in the `InnerClasses` attribute.
 #[derive(Debug, Clone)]
 pub struct InnerClassNode {
@@ -112,23 +135,31 @@ pub struct MethodNode {
     /// A bitmask of access flags (e.g., `ACC_PUBLIC`, `ACC_STATIC`, `ACC_SYNCHRONIZED`).
     pub access_flags: u16,
 
-    /// The constant pool index containing the name of the method (e.g., `<init>` or `main`).
-    pub name_index: u16,
-
-    /// The constant pool index containing the method descriptor (e.g., `([Ljava/lang/String;)V`).
-    pub descriptor_index: u16,
-
     /// The name of the method.
     pub name: String,
 
     /// The method descriptor describing parameter types and return type.
     pub descriptor: String,
 
-    /// The `Code` attribute containing the JVM bytecode instructions and exception handlers.
-    /// This will be `None` for `native` or `abstract` methods.
-    pub code: Option<CodeAttribute>,
+    /// Whether this method has a `Code` attribute.
+    /// This is `false` for `native` or `abstract` methods.
+    pub has_code: bool,
+
+    /// The maximum stack size required by the method's bytecode.
+    pub max_stack: u16,
+
+    /// The maximum number of local variables required by the method's bytecode.
+    pub max_locals: u16,
+
+    /// Decoded JVM instructions in an `InsnList`.
+    pub instructions: InsnList,
+
+    /// Exception handlers (raw entries in the code attribute).
+    pub exception_table: Vec<ExceptionTableEntry>,
+
+    /// Attributes associated with the `Code` attribute (e.g., `LineNumberTable`, `LocalVariableTable`).
+    pub code_attributes: Vec<AttributeInfo>,
 
     /// Other attributes associated with this method (e.g., `Exceptions`, `Synthetic`, `Deprecated`, `Signature`).
-    /// Note that the `Code` attribute is stored separately in the `code` field for convenience.
     pub attributes: Vec<AttributeInfo>,
 }
