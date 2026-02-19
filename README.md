@@ -13,7 +13,8 @@ cargo add rust-asm
 Or manually add it in Cargo.toml
 
 ```toml
-rust-asm = "<version>"
+# Remove the macros feature if you don't need macros
+rust-asm = { version = "<version>", features = ["macros"] }
 ```
 
 ## Feature
