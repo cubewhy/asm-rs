@@ -96,13 +96,11 @@ impl ConstantPoolBuilder {
     }
 
     pub fn integer(&mut self, value: i32) -> u16 {
-        let index = self.push(CpInfo::Integer(value));
-        index
+        self.push(CpInfo::Integer(value))
     }
 
     pub fn float(&mut self, value: f32) -> u16 {
-        let index = self.push(CpInfo::Float(value));
-        index
+        self.push(CpInfo::Float(value))
     }
 
     pub fn long(&mut self, value: i64) -> u16 {
@@ -406,13 +404,13 @@ impl ClassWriter {
 
         let constant_pool = self.cp.into_pool();
 
-        fn cp_utf8<'a>(cp: &'a [CpInfo], index: u16) -> Result<&'a str, String> {
+        fn cp_utf8(cp: &[CpInfo], index: u16) -> Result<&str, String> {
             match cp.get(index as usize) {
                 Some(CpInfo::Utf8(value)) => Ok(value.as_str()),
                 _ => Err(format!("invalid constant pool utf8 index {}", index)),
             }
         }
-        fn class_name<'a>(cp: &'a [CpInfo], index: u16) -> Result<&'a str, String> {
+        fn class_name(cp: &[CpInfo], index: u16) -> Result<&str, String> {
             match cp.get(index as usize) {
                 Some(CpInfo::Class { name_index }) => cp_utf8(cp, *name_index),
                 _ => Err(format!("invalid constant pool class index {}", index)),
@@ -423,7 +421,8 @@ impl ClassWriter {
         for attr in &self.attributes {
             if let AttributeInfo::InnerClasses { classes } = attr {
                 for entry in classes {
-                    let name = class_name(&constant_pool, entry.inner_class_info_index)?.to_string();
+                    let name =
+                        class_name(&constant_pool, entry.inner_class_info_index)?.to_string();
                     let outer_name = if entry.outer_class_info_index == 0 {
                         None
                     } else {
@@ -453,15 +452,15 @@ impl ClassWriter {
         }
         if outer_class.is_empty() {
             for attr in &self.attributes {
-                if let AttributeInfo::InnerClasses { classes } = attr {
-                    if let Some(entry) = classes.iter().find(|entry| {
+                if let AttributeInfo::InnerClasses { classes } = attr
+                    && let Some(entry) = classes.iter().find(|entry| {
                         entry.inner_class_info_index == this_class
                             && entry.outer_class_info_index != 0
-                    }) {
-                        outer_class =
-                            class_name(&constant_pool, entry.outer_class_info_index)?.to_string();
-                        break;
-                    }
+                    })
+                {
+                    outer_class =
+                        class_name(&constant_pool, entry.outer_class_info_index)?.to_string();
+                    break;
                 }
             }
         }
@@ -3520,7 +3519,7 @@ mod tests {
         cw.visit_source_file("TestClass.java");
 
         // Add a field
-        let mut fv = cw.visit_field(0x0002, "myField", "I");
+        let fv = cw.visit_field(0x0002, "myField", "I");
         fv.visit_end(&mut cw);
 
         // Add a default constructor

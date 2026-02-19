@@ -454,14 +454,14 @@ impl ClassFile {
         }
         if outer_class.is_empty() {
             for attr in &self.attributes {
-                if let AttributeInfo::InnerClasses { classes } = attr {
-                    if let Some(entry) = classes.iter().find(|entry| {
+                if let AttributeInfo::InnerClasses { classes } = attr
+                    && let Some(entry) = classes.iter().find(|entry| {
                         entry.inner_class_info_index == self.this_class
                             && entry.outer_class_info_index != 0
-                    }) {
-                        outer_class = self.class_name(entry.outer_class_info_index)?.to_string();
-                        break;
-                    }
+                    })
+                {
+                    outer_class = self.class_name(entry.outer_class_info_index)?.to_string();
+                    break;
                 }
             }
         }

@@ -114,6 +114,12 @@ pub struct Label {
     pub id: usize,
 }
 
+impl Default for Label {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Label {
     pub fn new() -> Self {
         Self {
@@ -125,6 +131,12 @@ impl Label {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LabelNode {
     pub id: usize,
+}
+
+impl Default for LabelNode {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LabelNode {
