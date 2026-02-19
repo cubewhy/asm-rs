@@ -641,44 +641,31 @@ impl MethodVisitor {
         } else {
             None
         };
-        let (
-            has_code,
-            max_stack,
-            max_locals,
-            instructions,
-            exception_table,
-            code_attributes,
-        ) = if let Some(code) = code {
-            let CodeAttribute {
-                max_stack,
-                max_locals,
-                instructions,
-                exception_table,
-                attributes,
-                ..
-            } = code;
-            let mut list = InsnList::new();
-            for insn in instructions {
-                list.add(insn);
-            }
-            (
-                true,
-                max_stack,
-                max_locals,
-                list,
-                exception_table,
-                attributes,
-            )
-        } else {
-            (
-                false,
-                0,
-                0,
-                InsnList::new(),
-                Vec::new(),
-                Vec::new(),
-            )
-        };
+        let (has_code, max_stack, max_locals, instructions, exception_table, code_attributes) =
+            if let Some(code) = code {
+                let CodeAttribute {
+                    max_stack,
+                    max_locals,
+                    instructions,
+                    exception_table,
+                    attributes,
+                    ..
+                } = code;
+                let mut list = InsnList::new();
+                for insn in instructions {
+                    list.add(insn);
+                }
+                (
+                    true,
+                    max_stack,
+                    max_locals,
+                    list,
+                    exception_table,
+                    attributes,
+                )
+            } else {
+                (false, 0, 0, InsnList::new(), Vec::new(), Vec::new())
+            };
         class.methods.push(MethodData {
             access_flags: self.access_flags,
             name: self.name,
@@ -1006,8 +993,10 @@ fn emit_insn_raw(code: &mut Vec<u8>, insn: Insn) -> Result<Insn, ClassWriteError
                     ));
                 }
             };
-            let opcode = if matches!(node.insn.opcode, opcodes::LDC | opcodes::LDC_W | opcodes::LDC2_W)
-            {
+            let opcode = if matches!(
+                node.insn.opcode,
+                opcodes::LDC | opcodes::LDC_W | opcodes::LDC2_W
+            ) {
                 node.insn.opcode
             } else if index <= 0xFF {
                 opcodes::LDC

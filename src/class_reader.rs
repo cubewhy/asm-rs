@@ -427,14 +427,7 @@ impl ClassFile {
                         code.attributes.clone(),
                     )
                 } else {
-                    (
-                        false,
-                        0,
-                        0,
-                        InsnList::new(),
-                        Vec::new(),
-                        Vec::new(),
-                    )
+                    (false, 0, 0, InsnList::new(), Vec::new(), Vec::new())
                 };
 
             methods.push(crate::nodes::MethodNode {
