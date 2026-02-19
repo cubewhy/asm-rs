@@ -334,13 +334,13 @@ impl MethodVisitor {
     }
 
     pub fn visit_insn(&mut self, opcode: u8) -> &mut Self {
-        self.insns.add(InsnNode { opcode });
+        self.insns.add(Into::<InsnNode>::into(opcode));
         self
     }
 
     pub fn visit_var_insn(&mut self, opcode: u8, var_index: u16) -> &mut Self {
         self.insns.add(VarInsnNode {
-            insn: InsnNode { opcode },
+            insn: opcode.into(),
             var_index,
         });
         self
@@ -653,7 +653,7 @@ fn resolve_ldc(node: LdcInsnNode, cp: &mut ConstantPoolBuilder) -> (u8, u16, Ldc
                 opcode,
                 index,
                 LdcInsnNode {
-                    insn: InsnNode { opcode },
+                    insn: opcode.into(),
                     value: LdcValue::Index(index),
                 },
             )
@@ -669,7 +669,7 @@ fn resolve_ldc(node: LdcInsnNode, cp: &mut ConstantPoolBuilder) -> (u8, u16, Ldc
                 opcode,
                 index,
                 LdcInsnNode {
-                    insn: InsnNode { opcode },
+                    insn: opcode.into(),
                     value: LdcValue::Index(index),
                 },
             )

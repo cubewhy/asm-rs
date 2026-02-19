@@ -225,7 +225,7 @@ impl From<Insn> for AbstractInsnNode {
 impl FieldInsnNode {
     pub fn new(opcode: u8, owner: &str, name: &str, descriptor: &str) -> Self {
         Self {
-            insn: InsnNode { opcode },
+            insn: opcode.into(),
             field_ref: MemberRef::Symbolic {
                 owner: owner.to_string(),
                 name: name.to_string(),
@@ -236,7 +236,7 @@ impl FieldInsnNode {
 
     pub fn from_index(opcode: u8, index: u16) -> Self {
         Self {
-            insn: InsnNode { opcode },
+            insn: opcode.into(),
             field_ref: MemberRef::Index(index),
         }
     }
@@ -245,7 +245,7 @@ impl FieldInsnNode {
 impl MethodInsnNode {
     pub fn new(opcode: u8, owner: &str, name: &str, descriptor: &str) -> Self {
         Self {
-            insn: InsnNode { opcode },
+            insn: opcode.into(),
             method_ref: MemberRef::Symbolic {
                 owner: owner.to_string(),
                 name: name.to_string(),
@@ -256,7 +256,7 @@ impl MethodInsnNode {
 
     pub fn from_index(opcode: u8, index: u16) -> Self {
         Self {
-            insn: InsnNode { opcode },
+            insn: opcode.into(),
             method_ref: MemberRef::Index(index),
         }
     }
@@ -265,16 +265,14 @@ impl MethodInsnNode {
 impl LdcInsnNode {
     pub fn from_index(opcode: u8, index: u16) -> Self {
         Self {
-            insn: InsnNode { opcode },
+            insn: opcode.into(),
             value: LdcValue::Index(index),
         }
     }
 
     pub fn string(value: &str) -> Self {
         Self {
-            insn: InsnNode {
-                opcode: opcodes::LDC,
-            },
+            insn: opcodes::LDC.into(),
             value: LdcValue::String(value.to_string()),
         }
     }
