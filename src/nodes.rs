@@ -106,9 +106,3 @@ pub struct MethodNode {
     /// Note that the `Code` attribute is stored separately in the `code` field for convenience.
     pub attributes: Vec<AttributeInfo>,
 }
-
-
-
-
-
-

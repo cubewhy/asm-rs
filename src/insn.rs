@@ -116,7 +116,9 @@ pub struct Label {
 
 impl Label {
     pub fn new() -> Self {
-        Self { id: next_label_id() }
+        Self {
+            id: next_label_id(),
+        }
     }
 }
 
@@ -127,7 +129,9 @@ pub struct LabelNode {
 
 impl LabelNode {
     pub fn new() -> Self {
-        Self { id: next_label_id() }
+        Self {
+            id: next_label_id(),
+        }
     }
 
     pub fn from_label(label: Label) -> Self {
@@ -140,7 +144,7 @@ pub struct LineNumberInsnNode {
     pub line: u16,
     pub start: LabelNode,
 }
-impl LineNumberInsnNode{
+impl LineNumberInsnNode {
     pub(crate) fn new(line: u16, start: LabelNode) -> Self {
         Self { line, start }
     }
@@ -223,8 +227,6 @@ impl InsnList {
         self.insns
     }
 }
-
-
 
 #[derive(Debug, Clone, Default)]
 pub struct NodeList {
@@ -372,7 +374,6 @@ impl LdcInsnNode {
             value: LdcValue::String(value.to_string()),
         }
     }
-
 }
 
 impl From<InsnNode> for Insn {

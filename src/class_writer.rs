@@ -554,7 +554,12 @@ pub struct FieldVisitor {
 }
 
 impl FieldVisitor {
-    pub fn new(access_flags: u16, name: &str, descriptor: &str, class_ptr: *mut ClassWriter) -> Self {
+    pub fn new(
+        access_flags: u16,
+        name: &str,
+        descriptor: &str,
+        class_ptr: *mut ClassWriter,
+    ) -> Self {
         Self {
             access_flags,
             name: name.to_string(),
@@ -686,7 +691,9 @@ impl CodeBody {
                     write_i2_at(&mut code, fixup.start + 1, offset as i16);
                 }
                 let resolved = Insn::Jump(JumpInsnNode {
-                    insn: InsnNode { opcode: fixup.opcode },
+                    insn: InsnNode {
+                        opcode: fixup.opcode,
+                    },
                     offset,
                 });
                 instructions[fixup.insn_index] = resolved.clone();
@@ -735,11 +742,7 @@ fn is_wide_jump(opcode: u8) -> bool {
 }
 
 fn jump_size(opcode: u8) -> usize {
-    if is_wide_jump(opcode) {
-        5
-    } else {
-        3
-    }
+    if is_wide_jump(opcode) { 5 } else { 3 }
 }
 fn build_code_attribute(
     max_stack: u16,
