@@ -1381,13 +1381,20 @@ impl ClassFileWriter {
             precomputed_maxs.resize(class_node.methods.len(), None);
         }
 
+        let super_class = match class_node.super_name.as_deref() {
+            Some(name) => ensure_class(&mut cp, name),
+            None => {
+                if class_node.name == "java/lang/Object" {
+                    0
+                } else {
+                    ensure_class(&mut cp, "java/lang/Object")
+                }
+            }
+        };
+
         write_constant_pool(&mut out, &cp)?;
         write_u2(&mut out, class_node.access_flags);
         write_u2(&mut out, class_node.this_class);
-        let super_class = match class_node.super_name.as_deref() {
-            Some(name) => ensure_class(&mut cp, name),
-            None => 0,
-        };
         write_u2(&mut out, super_class);
         write_u2(&mut out, class_node.interface_indices.len() as u16);
         for index in &class_node.interface_indices {
