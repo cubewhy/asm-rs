@@ -7,9 +7,9 @@ use crate::class_reader::{
 use crate::constants;
 use crate::error::ClassWriteError;
 use crate::insn::{
-    AbstractInsnNode, FieldInsnNode, Insn, InsnList, InsnNode, JumpInsnNode, JumpLabelInsnNode,
-    Label, LabelNode, LdcInsnNode, LdcValue, LineNumberInsnNode, MemberRef, MethodInsnNode,
-    NodeList, VarInsnNode,
+    AbstractInsnNode, BootstrapArgument, FieldInsnNode, Handle, Insn, InsnList, InsnNode,
+    JumpInsnNode, JumpLabelInsnNode, Label, LabelNode, LdcInsnNode, LdcValue, LineNumberInsnNode,
+    MemberRef, MethodInsnNode, NodeList, VarInsnNode,
 };
 use crate::nodes::{ClassNode, FieldNode, InnerClassNode, MethodNode};
 use crate::opcodes;
@@ -39,6 +39,10 @@ pub struct ConstantPoolBuilder {
     name_and_type: HashMap<(String, String), u16>,
     field_ref: HashMap<(String, String, String), u16>,
     method_ref: HashMap<(String, String, String), u16>,
+    interface_method_ref: HashMap<(String, String, String), u16>,
+    method_type: HashMap<String, u16>,
+    method_handle: HashMap<(u8, String, String, String, bool), u16>,
+    invoke_dynamic: HashMap<(u16, String, String), u16>,
 }
 
 impl ConstantPoolBuilder {
@@ -164,6 +168,70 @@ impl ConstantPoolBuilder {
             name_and_type_index,
         });
         self.method_ref.insert(key, index);
+        index
+    }
+
+    pub fn interface_method_ref(&mut self, owner: &str, name: &str, descriptor: &str) -> u16 {
+        let key = (owner.to_string(), name.to_string(), descriptor.to_string());
+        if let Some(index) = self.interface_method_ref.get(&key) {
+            return *index;
+        }
+        let class_index = self.class(owner);
+        let name_and_type_index = self.name_and_type(name, descriptor);
+        let index = self.push(CpInfo::InterfaceMethodref {
+            class_index,
+            name_and_type_index,
+        });
+        self.interface_method_ref.insert(key, index);
+        index
+    }
+
+    pub fn method_type(&mut self, descriptor: &str) -> u16 {
+        if let Some(index) = self.method_type.get(descriptor) {
+            return *index;
+        }
+        let descriptor_index = self.utf8(descriptor);
+        let index = self.push(CpInfo::MethodType { descriptor_index });
+        self.method_type
+            .insert(descriptor.to_string(), index);
+        index
+    }
+
+    pub fn method_handle(&mut self, handle: &Handle) -> u16 {
+        let key = (
+            handle.reference_kind,
+            handle.owner.clone(),
+            handle.name.clone(),
+            handle.descriptor.clone(),
+            handle.is_interface,
+        );
+        if let Some(index) = self.method_handle.get(&key) {
+            return *index;
+        }
+        let reference_index = match handle.reference_kind {
+            1 | 2 | 3 | 4 => self.field_ref(&handle.owner, &handle.name, &handle.descriptor),
+            9 => self.interface_method_ref(&handle.owner, &handle.name, &handle.descriptor),
+            _ => self.method_ref(&handle.owner, &handle.name, &handle.descriptor),
+        };
+        let index = self.push(CpInfo::MethodHandle {
+            reference_kind: handle.reference_kind,
+            reference_index,
+        });
+        self.method_handle.insert(key, index);
+        index
+    }
+
+    pub fn invoke_dynamic(&mut self, bsm_index: u16, name: &str, descriptor: &str) -> u16 {
+        let key = (bsm_index, name.to_string(), descriptor.to_string());
+        if let Some(index) = self.invoke_dynamic.get(&key) {
+            return *index;
+        }
+        let name_and_type_index = self.name_and_type(name, descriptor);
+        let index = self.push(CpInfo::InvokeDynamic {
+            bootstrap_method_attr_index: bsm_index,
+            name_and_type_index,
+        });
+        self.invoke_dynamic.insert(key, index);
         index
     }
 
@@ -353,6 +421,49 @@ impl ClassWriter {
     pub fn add_attribute(&mut self, attr: AttributeInfo) -> &mut Self {
         self.attributes.push(attr);
         self
+    }
+
+    fn ensure_bootstrap_method(
+        &mut self,
+        bootstrap_method: &Handle,
+        bootstrap_args: &[BootstrapArgument],
+    ) -> u16 {
+        let bootstrap_method_ref = self.cp.method_handle(bootstrap_method);
+        let mut bootstrap_arguments = Vec::with_capacity(bootstrap_args.len());
+        for arg in bootstrap_args {
+            let index = match arg {
+                BootstrapArgument::Integer(value) => self.cp.integer(*value),
+                BootstrapArgument::Float(value) => self.cp.float(*value),
+                BootstrapArgument::Long(value) => self.cp.long(*value),
+                BootstrapArgument::Double(value) => self.cp.double(*value),
+                BootstrapArgument::String(value) => self.cp.string(value),
+                BootstrapArgument::Class(value) => self.cp.class(value),
+                BootstrapArgument::MethodType(value) => self.cp.method_type(value),
+                BootstrapArgument::Handle(value) => self.cp.method_handle(value),
+            };
+            bootstrap_arguments.push(index);
+        }
+
+        let methods = if let Some(AttributeInfo::BootstrapMethods { methods }) = self
+            .attributes
+            .iter_mut()
+            .find(|attr| matches!(attr, AttributeInfo::BootstrapMethods { .. }))
+        {
+            methods
+        } else {
+            self.attributes
+                .push(AttributeInfo::BootstrapMethods { methods: Vec::new() });
+            match self.attributes.last_mut() {
+                Some(AttributeInfo::BootstrapMethods { methods }) => methods,
+                _ => unreachable!("bootstrap methods attribute missing"),
+            }
+        };
+
+        methods.push(BootstrapMethod {
+            bootstrap_method_ref,
+            bootstrap_arguments,
+        });
+        (methods.len() - 1) as u16
     }
 
     /// Converts the builder state into a `ClassNode` object model.
@@ -593,6 +704,24 @@ impl MethodVisitor {
         self
     }
 
+    pub fn visit_invokedynamic_insn(
+        &mut self,
+        name: &str,
+        descriptor: &str,
+        bootstrap_method: Handle,
+        bootstrap_args: &[BootstrapArgument],
+    ) -> &mut Self {
+        self.insns.add(Insn::InvokeDynamic(
+            crate::insn::InvokeDynamicInsnNode::new(
+                name,
+                descriptor,
+                bootstrap_method,
+                bootstrap_args,
+            ),
+        ));
+        self
+    }
+
     pub fn visit_jump_insn(&mut self, opcode: u8, target: Label) -> &mut Self {
         self.insns.add(JumpLabelInsnNode {
             insn: opcode.into(),
@@ -629,6 +758,32 @@ impl MethodVisitor {
 
     /// Finalizes the method and attaches it to the parent `ClassWriter`.
     pub fn visit_end(mut self, class: &mut ClassWriter) {
+        let mut resolved = NodeList::new();
+        for node in self.insns.into_nodes() {
+            let node = match node {
+                AbstractInsnNode::Insn(Insn::InvokeDynamic(mut insn)) => {
+                    if insn.method_index == 0 {
+                        if let (Some(name), Some(descriptor), Some(bootstrap_method)) = (
+                            insn.name.take(),
+                            insn.descriptor.take(),
+                            insn.bootstrap_method.take(),
+                        ) {
+                            let bsm_index = class.ensure_bootstrap_method(
+                                &bootstrap_method,
+                                &insn.bootstrap_args,
+                            );
+                            let method_index =
+                                class.cp.invoke_dynamic(bsm_index, &name, &descriptor);
+                            insn.method_index = method_index;
+                        }
+                    }
+                    AbstractInsnNode::Insn(Insn::InvokeDynamic(insn))
+                }
+                other => other,
+            };
+            resolved.add_node(node);
+        }
+        self.insns = resolved;
         let code = if self.has_code || !self.insns.nodes().is_empty() {
             Some(build_code_attribute(
                 self.max_stack,

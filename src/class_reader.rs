@@ -1284,10 +1284,7 @@ fn parse_code_instructions(code: &[u8]) -> Result<Vec<Insn>, ClassReadError> {
             opcodes::INVOKEDYNAMIC => {
                 let method_index = reader.read_u2()?;
                 let _ = reader.read_u2()?;
-                Insn::InvokeDynamic(InvokeDynamicInsnNode {
-                    insn: opcode.into(),
-                    method_index,
-                })
+                Insn::InvokeDynamic(InvokeDynamicInsnNode::from_index(method_index))
             }
             opcodes::NEW => Insn::Type(TypeInsnNode {
                 insn: opcode.into(),
@@ -1423,10 +1420,7 @@ fn parse_code_instructions_with_offsets(
             opcodes::INVOKEDYNAMIC => {
                 let method_index = reader.read_u2()?;
                 let _ = reader.read_u2()?;
-                Insn::InvokeDynamic(InvokeDynamicInsnNode {
-                    insn: opcode.into(),
-                    method_index,
-                })
+                Insn::InvokeDynamic(InvokeDynamicInsnNode::from_index(method_index))
             }
             opcodes::NEW => Insn::Type(TypeInsnNode {
                 insn: opcode.into(),

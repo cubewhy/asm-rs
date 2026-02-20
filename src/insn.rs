@@ -53,6 +53,10 @@ pub struct InvokeInterfaceInsnNode {
 pub struct InvokeDynamicInsnNode {
     pub insn: InsnNode,
     pub method_index: u16,
+    pub name: Option<String>,
+    pub descriptor: Option<String>,
+    pub bootstrap_method: Option<Handle>,
+    pub bootstrap_args: Vec<BootstrapArgument>,
 }
 
 #[derive(Debug, Clone)]
@@ -216,6 +220,27 @@ pub enum LdcValue {
     Double(f64),
 }
 
+#[derive(Debug, Clone)]
+pub struct Handle {
+    pub reference_kind: u8,
+    pub owner: String,
+    pub name: String,
+    pub descriptor: String,
+    pub is_interface: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum BootstrapArgument {
+    Integer(i32),
+    Float(f32),
+    Long(i64),
+    Double(f64),
+    String(String),
+    Class(String),
+    MethodType(String),
+    Handle(Handle),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct InsnList {
     insns: Vec<Insn>,
@@ -252,6 +277,11 @@ impl NodeList {
 
     pub fn add<T: Into<AbstractInsnNode>>(&mut self, node: T) -> &mut Self {
         self.nodes.push(node.into());
+        self
+    }
+
+    pub fn add_node(&mut self, node: AbstractInsnNode) -> &mut Self {
+        self.nodes.push(node);
         self
     }
 
@@ -324,6 +354,35 @@ impl MethodInsnNode {
         Self {
             insn: opcode.into(),
             method_ref: MemberRef::Index(index),
+        }
+    }
+}
+
+impl InvokeDynamicInsnNode {
+    pub fn new(
+        name: &str,
+        descriptor: &str,
+        bootstrap_method: Handle,
+        bootstrap_args: &[BootstrapArgument],
+    ) -> Self {
+        Self {
+            insn: opcodes::INVOKEDYNAMIC.into(),
+            method_index: 0,
+            name: Some(name.to_string()),
+            descriptor: Some(descriptor.to_string()),
+            bootstrap_method: Some(bootstrap_method),
+            bootstrap_args: bootstrap_args.to_vec(),
+        }
+    }
+
+    pub fn from_index(index: u16) -> Self {
+        Self {
+            insn: opcodes::INVOKEDYNAMIC.into(),
+            method_index: index,
+            name: None,
+            descriptor: None,
+            bootstrap_method: None,
+            bootstrap_args: Vec::new(),
         }
     }
 }
