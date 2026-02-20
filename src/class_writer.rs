@@ -751,7 +751,7 @@ impl Drop for FieldVisitor {
     }
 }
 
-struct CodeBody {
+pub struct CodeBody {
     max_stack: u16,
     max_locals: u16,
     insns: NodeList,
@@ -760,7 +760,7 @@ struct CodeBody {
 }
 
 impl CodeBody {
-    fn new(max_stack: u16, max_locals: u16, insns: NodeList) -> Self {
+    pub fn new(max_stack: u16, max_locals: u16, insns: NodeList) -> Self {
         Self {
             max_stack,
             max_locals,
@@ -770,7 +770,7 @@ impl CodeBody {
         }
     }
 
-    fn build(self, cp: &mut ConstantPoolBuilder) -> CodeAttribute {
+    pub fn build(self, cp: &mut ConstantPoolBuilder) -> CodeAttribute {
         let mut code = Vec::new();
         let mut instructions = Vec::new();
         let mut insn_nodes = Vec::new();
@@ -882,6 +882,7 @@ fn is_wide_jump(opcode: u8) -> bool {
 fn jump_size(opcode: u8) -> usize {
     if is_wide_jump(opcode) { 5 } else { 3 }
 }
+
 fn build_code_attribute(
     max_stack: u16,
     max_locals: u16,
