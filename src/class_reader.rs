@@ -6,6 +6,7 @@ use crate::insn::{
     TryCatchBlockNode, TypeInsnNode, VarInsnNode,
 };
 use crate::{constants, opcodes};
+use crate::types::Type;
 
 /// Represents a constant value loadable by the `LDC` (Load Constant) instruction.
 ///
@@ -1683,6 +1684,18 @@ fn visit_instruction(
                 LdcValue::Index(index) => index,
                 LdcValue::String(value) => {
                     mv.visit_ldc_insn(LdcConstant::String(value));
+                    return Ok(());
+                }
+                LdcValue::Type(value) => {
+                    match value.clone() {
+                        Type::Method { .. } => {
+                            mv.visit_ldc_insn(LdcConstant::MethodType(value.get_descriptor()));
+                        }
+                        _ => {
+                            mv.visit_ldc_insn(LdcConstant::Class(value.get_descriptor()));
+                        }
+                    }
+                  
                     return Ok(());
                 }
                 LdcValue::Int(value) => {
