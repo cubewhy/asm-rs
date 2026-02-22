@@ -1,5 +1,6 @@
 use crate::opcodes;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::types::Type;
 
 #[derive(Debug, Clone)]
 pub struct InsnNode {
@@ -214,6 +215,7 @@ pub enum MemberRef {
 pub enum LdcValue {
     Index(u16),
     String(String),
+    Type(Type),
     Int(i32),
     Float(f32),
     Long(i64),
@@ -443,6 +445,13 @@ impl LdcInsnNode {
         Self {
             insn: opcodes::LDC.into(),
             value: LdcValue::String(value.to_string()),
+        }
+    }
+
+    pub fn typed(value: Type) -> Self {
+        Self {
+            insn: opcodes::LDC.into(),
+            value: LdcValue::Type(value),
         }
     }
 }

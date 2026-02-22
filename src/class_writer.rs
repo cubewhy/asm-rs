@@ -13,6 +13,7 @@ use crate::insn::{
 };
 use crate::nodes::{ClassNode, FieldNode, InnerClassNode, MethodNode};
 use crate::opcodes;
+use crate::types::Type;
 
 pub const SKIP_FRAMES: u32 = 0x0;
 
@@ -1737,6 +1738,32 @@ fn resolve_ldc(node: LdcInsnNode, cp: &mut ConstantPoolBuilder) -> (u8, u16, Ldc
         }
         LdcValue::String(value) => {
             let index = cp.string(&value);
+            let opcode = if index <= 0xFF {
+                opcodes::LDC
+            } else {
+                opcodes::LDC_W
+            };
+            (
+                opcode,
+                index,
+                LdcInsnNode {
+                    insn: opcode.into(),
+                    value: LdcValue::Index(index),
+                },
+            )
+        }
+        LdcValue::Type(value) => {
+            let index = match value.clone() {
+                Type::Object(obj) => {
+                    cp.class(&obj)
+                },
+                Type::Method { argument_types: _, return_type: _ } => {
+                    cp.method_type(&value.clone().get_descriptor())
+                },
+                _ => {
+                    cp.class(&value.clone().get_descriptor())
+                }
+            };
             let opcode = if index <= 0xFF {
                 opcodes::LDC
             } else {
