@@ -110,12 +110,6 @@ pub struct FieldNode {
     /// A bitmask of access flags (e.g., `ACC_PUBLIC`, `ACC_STATIC`, `ACC_FINAL`).
     pub access_flags: u16,
 
-    /// The constant pool index containing the name of the field.
-    pub name_index: u16,
-
-    /// The constant pool index containing the field descriptor.
-    pub descriptor_index: u16,
-
     /// The name of the field.
     pub name: String,
 

@@ -393,8 +393,6 @@ impl ClassFile {
             let descriptor = self.cp_utf8(field.descriptor_index)?.to_string();
             fields.push(crate::nodes::FieldNode {
                 access_flags: field.access_flags,
-                name_index: field.name_index,
-                descriptor_index: field.descriptor_index,
                 name,
                 descriptor,
                 attributes: field.attributes.clone(),

@@ -9,10 +9,12 @@ use crate::error::ClassWriteError;
 use crate::insn::{
     AbstractInsnNode, BootstrapArgument, FieldInsnNode, Handle, Insn, InsnList, InsnNode,
     InvokeInterfaceInsnNode, JumpInsnNode, JumpLabelInsnNode, Label, LabelNode, LdcInsnNode,
-    LdcValue, LineNumberInsnNode, MemberRef, MethodInsnNode, NodeList, VarInsnNode,
+    LdcValue, LineNumberInsnNode, MemberRef, MethodInsnNode, NodeList, TypeInsnNode, VarInsnNode,
 };
 use crate::nodes::{ClassNode, FieldNode, InnerClassNode, MethodNode};
 use crate::opcodes;
+
+pub const SKIP_FRAMES: u32 = 0x0;
 
 /// Flag to automatically compute the stack map frames.
 ///
@@ -54,6 +56,207 @@ impl ConstantPoolBuilder {
             cp: vec![CpInfo::Unusable],
             ..Default::default()
         }
+    }
+
+    /// Creates a `ConstantPoolBuilder` pre-populated with an existing pool.
+    ///
+    /// This preserves existing indices and initializes deduplication maps
+    /// based on the pool contents.
+    pub fn from_pool(pool: Vec<CpInfo>) -> Self {
+        let cp = if pool.is_empty() {
+            vec![CpInfo::Unusable]
+        } else {
+            pool
+        };
+        let mut builder = Self {
+            cp,
+            ..Default::default()
+        };
+
+        fn cp_utf8(cp: &[CpInfo], index: u16) -> Option<&str> {
+            match cp.get(index as usize) {
+                Some(CpInfo::Utf8(value)) => Some(value.as_str()),
+                _ => None,
+            }
+        }
+
+        fn cp_class_name(cp: &[CpInfo], index: u16) -> Option<&str> {
+            match cp.get(index as usize) {
+                Some(CpInfo::Class { name_index }) => cp_utf8(cp, *name_index),
+                _ => None,
+            }
+        }
+
+        fn cp_name_and_type(cp: &[CpInfo], index: u16) -> Option<(&str, &str)> {
+            match cp.get(index as usize) {
+                Some(CpInfo::NameAndType {
+                    name_index,
+                    descriptor_index,
+                }) => {
+                    let name = cp_utf8(cp, *name_index)?;
+                    let desc = cp_utf8(cp, *descriptor_index)?;
+                    Some((name, desc))
+                }
+                _ => None,
+            }
+        }
+
+        fn cp_member_ref(
+            cp: &[CpInfo],
+            index: u16,
+        ) -> Option<(String, String, String, bool)> {
+            match cp.get(index as usize) {
+                Some(CpInfo::Fieldref {
+                    class_index,
+                    name_and_type_index,
+                }) => {
+                    let owner = cp_class_name(cp, *class_index)?.to_string();
+                    let (name, desc) = cp_name_and_type(cp, *name_and_type_index)?;
+                    Some((owner, name.to_string(), desc.to_string(), false))
+                }
+                Some(CpInfo::Methodref {
+                    class_index,
+                    name_and_type_index,
+                }) => {
+                    let owner = cp_class_name(cp, *class_index)?.to_string();
+                    let (name, desc) = cp_name_and_type(cp, *name_and_type_index)?;
+                    Some((owner, name.to_string(), desc.to_string(), false))
+                }
+                Some(CpInfo::InterfaceMethodref {
+                    class_index,
+                    name_and_type_index,
+                }) => {
+                    let owner = cp_class_name(cp, *class_index)?.to_string();
+                    let (name, desc) = cp_name_and_type(cp, *name_and_type_index)?;
+                    Some((owner, name.to_string(), desc.to_string(), true))
+                }
+                _ => None,
+            }
+        }
+
+        for (index, entry) in builder.cp.iter().enumerate() {
+            let index = index as u16;
+            match entry {
+                CpInfo::Utf8(value) => {
+                    builder.utf8.entry(value.clone()).or_insert(index);
+                }
+                CpInfo::Class { name_index } => {
+                    if let Some(name) = cp_utf8(&builder.cp, *name_index) {
+                        builder.class.entry(name.to_string()).or_insert(index);
+                    }
+                }
+                CpInfo::String { string_index } => {
+                    if let Some(value) = cp_utf8(&builder.cp, *string_index) {
+                        builder.string.entry(value.to_string()).or_insert(index);
+                    }
+                }
+                CpInfo::NameAndType {
+                    name_index,
+                    descriptor_index,
+                } => {
+                    if let (Some(name), Some(desc)) = (
+                        cp_utf8(&builder.cp, *name_index),
+                        cp_utf8(&builder.cp, *descriptor_index),
+                    ) {
+                        builder
+                            .name_and_type
+                            .entry((name.to_string(), desc.to_string()))
+                            .or_insert(index);
+                    }
+                }
+                CpInfo::Fieldref {
+                    class_index,
+                    name_and_type_index,
+                } => {
+                    if let (Some(owner), Some((name, desc))) = (
+                        cp_class_name(&builder.cp, *class_index),
+                        cp_name_and_type(&builder.cp, *name_and_type_index),
+                    ) {
+                        builder
+                            .field_ref
+                            .entry((
+                                owner.to_string(),
+                                name.to_string(),
+                                desc.to_string(),
+                            ))
+                            .or_insert(index);
+                    }
+                }
+                CpInfo::Methodref {
+                    class_index,
+                    name_and_type_index,
+                } => {
+                    if let (Some(owner), Some((name, desc))) = (
+                        cp_class_name(&builder.cp, *class_index),
+                        cp_name_and_type(&builder.cp, *name_and_type_index),
+                    ) {
+                        builder
+                            .method_ref
+                            .entry((
+                                owner.to_string(),
+                                name.to_string(),
+                                desc.to_string(),
+                            ))
+                            .or_insert(index);
+                    }
+                }
+                CpInfo::InterfaceMethodref {
+                    class_index,
+                    name_and_type_index,
+                } => {
+                    if let (Some(owner), Some((name, desc))) = (
+                        cp_class_name(&builder.cp, *class_index),
+                        cp_name_and_type(&builder.cp, *name_and_type_index),
+                    ) {
+                        builder
+                            .interface_method_ref
+                            .entry((
+                                owner.to_string(),
+                                name.to_string(),
+                                desc.to_string(),
+                            ))
+                            .or_insert(index);
+                    }
+                }
+                CpInfo::MethodType { descriptor_index } => {
+                    if let Some(desc) = cp_utf8(&builder.cp, *descriptor_index) {
+                        builder
+                            .method_type
+                            .entry(desc.to_string())
+                            .or_insert(index);
+                    }
+                }
+                CpInfo::MethodHandle {
+                    reference_kind,
+                    reference_index,
+                } => {
+                    if let Some((owner, name, desc, is_interface)) =
+                        cp_member_ref(&builder.cp, *reference_index)
+                    {
+                        builder
+                            .method_handle
+                            .entry((*reference_kind, owner, name, desc, is_interface))
+                            .or_insert(index);
+                    }
+                }
+                CpInfo::InvokeDynamic {
+                    bootstrap_method_attr_index,
+                    name_and_type_index,
+                } => {
+                    if let Some((name, desc)) =
+                        cp_name_and_type(&builder.cp, *name_and_type_index)
+                    {
+                        builder
+                            .invoke_dynamic
+                            .entry((*bootstrap_method_attr_index, name.to_string(), desc.to_string()))
+                            .or_insert(index);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        builder
     }
 
     /// Consumes the builder and returns the raw vector of `CpInfo` entries.
@@ -319,6 +522,102 @@ impl ClassWriter {
         }
     }
 
+    /// Creates a `ClassWriter` from an existing `ClassNode`.
+    ///
+    /// This preserves the constant pool indices from the node and allows
+    /// further edits using the `ClassWriter` API.
+    pub fn from_class_node(class_node: ClassNode, options: u32) -> Self {
+        let ClassNode {
+            minor_version,
+            major_version,
+            access_flags,
+            constant_pool,
+            name,
+            super_name,
+            source_file,
+            interfaces,
+            fields,
+            methods,
+            mut attributes,
+            inner_classes,
+            ..
+        } = class_node;
+
+        let mut cp = ConstantPoolBuilder::from_pool(constant_pool);
+
+        if source_file.is_some() {
+            attributes.retain(|attr| !matches!(attr, AttributeInfo::SourceFile { .. }));
+        }
+
+        let mut field_data = Vec::with_capacity(fields.len());
+        for field in fields {
+            field_data.push(FieldData {
+                access_flags: field.access_flags,
+                name: field.name,
+                descriptor: field.descriptor,
+                attributes: field.attributes,
+            });
+        }
+
+        let mut method_data = Vec::with_capacity(methods.len());
+        for method in methods {
+            method_data.push(MethodData {
+                access_flags: method.access_flags,
+                name: method.name,
+                descriptor: method.descriptor,
+                has_code: method.has_code,
+                max_stack: method.max_stack,
+                max_locals: method.max_locals,
+                instructions: method.instructions,
+                exception_table: method.exception_table,
+                code_attributes: method.code_attributes,
+                attributes: method.attributes,
+            });
+        }
+
+        let has_inner_classes = attributes
+            .iter()
+            .any(|attr| matches!(attr, AttributeInfo::InnerClasses { .. }));
+        if !has_inner_classes && !inner_classes.is_empty() {
+            let mut classes = Vec::with_capacity(inner_classes.len());
+            for entry in inner_classes {
+                let inner_class_info_index = cp.class(&entry.name);
+                let outer_class_info_index = entry
+                    .outer_name
+                    .as_deref()
+                    .map(|value| cp.class(value))
+                    .unwrap_or(0);
+                let inner_name_index = entry
+                    .inner_name
+                    .as_deref()
+                    .map(|value| cp.utf8(value))
+                    .unwrap_or(0);
+                classes.push(InnerClass {
+                    inner_class_info_index,
+                    outer_class_info_index,
+                    inner_name_index,
+                    inner_class_access_flags: entry.access_flags,
+                });
+            }
+            attributes.push(AttributeInfo::InnerClasses { classes });
+        }
+
+        Self {
+            options,
+            minor_version,
+            major_version,
+            access_flags,
+            name,
+            super_name,
+            interfaces,
+            fields: field_data,
+            methods: method_data,
+            attributes,
+            source_file,
+            cp,
+        }
+    }
+
     /// Defines the header of the class.
     ///
     /// # Arguments
@@ -485,12 +784,8 @@ impl ClassWriter {
 
         let mut fields = Vec::with_capacity(self.fields.len());
         for field in self.fields {
-            let name_index = self.cp.utf8(&field.name);
-            let descriptor_index = self.cp.utf8(&field.descriptor);
             fields.push(FieldNode {
                 access_flags: field.access_flags,
-                name_index,
-                descriptor_index,
                 name: field.name,
                 descriptor: field.descriptor,
                 attributes: field.attributes,
@@ -601,7 +896,6 @@ impl ClassWriter {
             outer_class,
         })
     }
-
     /// Generates the raw byte vector representing the .class file.
     ///
     /// This method performs all necessary computations (stack map frames, max stack size)
@@ -634,6 +928,7 @@ pub struct MethodVisitor {
     max_stack: u16,
     max_locals: u16,
     insns: NodeList,
+    pending_type_names: Vec<String>,
     exception_table: Vec<ExceptionTableEntry>,
     code_attributes: Vec<AttributeInfo>,
     attributes: Vec<AttributeInfo>,
@@ -649,6 +944,7 @@ impl MethodVisitor {
             max_stack: 0,
             max_locals: 0,
             insns: NodeList::new(),
+            pending_type_names: Vec::new(),
             exception_table: Vec::new(),
             code_attributes: Vec::new(),
             attributes: Vec::new(),
@@ -672,6 +968,16 @@ impl MethodVisitor {
         self.insns.add(Insn::Var(VarInsnNode {
             insn: opcode.into(),
             var_index,
+        }));
+        self
+    }
+
+    /// Visits a type instruction (e.g., NEW, ANEWARRAY, CHECKCAST, INSTANCEOF).
+    pub fn visit_type_insn(&mut self, opcode: u8, type_name: &str) -> &mut Self {
+        self.pending_type_names.push(type_name.to_string());
+        self.insns.add(Insn::Type(TypeInsnNode {
+            insn: opcode.into(),
+            type_index: 0,
         }));
         self
     }
@@ -770,8 +1076,17 @@ impl MethodVisitor {
     /// Finalizes the method and attaches it to the parent `ClassWriter`.
     pub fn visit_end(mut self, class: &mut ClassWriter) {
         let mut resolved = NodeList::new();
+        let mut pending_type_names = self.pending_type_names.into_iter();
         for node in self.insns.into_nodes() {
             let node = match node {
+                AbstractInsnNode::Insn(Insn::Type(mut insn)) => {
+                    if insn.type_index == 0
+                        && let Some(type_name) = pending_type_names.next()
+                    {
+                        insn.type_index = class.cp.class(&type_name);
+                    }
+                    AbstractInsnNode::Insn(Insn::Type(insn))
+                }
                 AbstractInsnNode::Insn(Insn::InvokeDynamic(mut insn)) => {
                     if insn.method_index == 0 {
                         if let (Some(name), Some(descriptor), Some(bootstrap_method)) = (
@@ -1643,9 +1958,11 @@ fn write_field(
     field: &FieldNode,
     cp: &mut Vec<CpInfo>,
 ) -> Result<(), ClassWriteError> {
+    let name_index = ensure_utf8(cp, &field.name);
+    let descriptor_index = ensure_utf8(cp, &field.descriptor);
     write_u2(out, field.access_flags);
-    write_u2(out, field.name_index);
-    write_u2(out, field.descriptor_index);
+    write_u2(out, name_index);
+    write_u2(out, descriptor_index);
     write_u2(out, field.attributes.len() as u16);
     for attr in &field.attributes {
         write_attribute(out, attr, cp, None, 0, None, None)?;
