@@ -68,3 +68,16 @@ pub const ACC_SYNTHETIC: u16 = 0x1000;
 pub const ACC_ANNOTATION: u16 = 0x2000;
 pub const ACC_ENUM: u16 = 0x4000;
 pub const ACC_MODULE: u16 = 0x8000;
+
+
+//method handle info
+pub const REF_GET_FIELD: u8 = 1;
+pub const REF_GET_STATIC: u8 = 2;
+pub const REF_PUT_FIELD: u8 = 3;
+pub const REF_PUT_STATIC: u8 = 4;
+pub const REF_INVOKE_VIRTUAL: u8 = 5;
+pub const REF_INVOKE_STATIC: u8 = 6;
+pub const REF_INVOKE_SPECIAL: u8 = 7;
+pub const REF_NEW_INVOKE_SPECIAL: u8 = 8;
+pub const REF_INVOKE_INTERFACE: u8 = 9;
+

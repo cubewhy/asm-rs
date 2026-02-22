@@ -8,8 +8,8 @@ use crate::constants;
 use crate::error::ClassWriteError;
 use crate::insn::{
     AbstractInsnNode, BootstrapArgument, FieldInsnNode, Handle, Insn, InsnList, InsnNode,
-    JumpInsnNode, JumpLabelInsnNode, Label, LabelNode, LdcInsnNode, LdcValue, LineNumberInsnNode,
-    MemberRef, MethodInsnNode, NodeList, VarInsnNode,
+    InvokeInterfaceInsnNode, JumpInsnNode, JumpLabelInsnNode, Label, LabelNode, LdcInsnNode,
+    LdcValue, LineNumberInsnNode, MemberRef, MethodInsnNode, NodeList, VarInsnNode,
 };
 use crate::nodes::{ClassNode, FieldNode, InnerClassNode, MethodNode};
 use crate::opcodes;
@@ -453,9 +453,10 @@ impl ClassWriter {
         } else {
             self.attributes
                 .push(AttributeInfo::BootstrapMethods { methods: Vec::new() });
-            match self.attributes.last_mut() {
-                Some(AttributeInfo::BootstrapMethods { methods }) => methods,
-                _ => unreachable!("bootstrap methods attribute missing"),
+            if let Some(AttributeInfo::BootstrapMethods { methods }) = self.attributes.last_mut() {
+                methods
+            } else {
+                return 0;
             }
         };
 
@@ -720,6 +721,16 @@ impl MethodVisitor {
             ),
         ));
         self
+    }
+
+    pub fn visit_invoke_dynamic_insn(
+        &mut self,
+        name: &str,
+        descriptor: &str,
+        bootstrap_method: Handle,
+        bootstrap_args: &[BootstrapArgument],
+    ) -> &mut Self {
+        self.visit_invokedynamic_insn(name, descriptor, bootstrap_method, bootstrap_args)
     }
 
     pub fn visit_jump_insn(&mut self, opcode: u8, target: Label) -> &mut Self {
@@ -1243,9 +1254,24 @@ fn emit_insn(code: &mut Vec<u8>, insn: Insn, cp: &mut ConstantPoolBuilder) -> In
         }
         Insn::Method(node) => {
             code.push(node.insn.opcode);
+            let interface_count = if node.insn.opcode == opcodes::INVOKEINTERFACE {
+                method_ref_interface_count(&node.method_ref)
+            } else {
+                0
+            };
             let (index, resolved) = resolve_method_ref(node, cp);
             write_u2(code, index);
-            Insn::Method(resolved)
+            if resolved.insn.opcode == opcodes::INVOKEINTERFACE {
+                write_u1(code, interface_count);
+                write_u1(code, 0);
+                Insn::InvokeInterface(InvokeInterfaceInsnNode {
+                    insn: opcodes::INVOKEINTERFACE.into(),
+                    method_index: index,
+                    count: interface_count,
+                })
+            } else {
+                Insn::Method(resolved)
+            }
         }
         Insn::InvokeInterface(node) => {
             code.push(node.insn.opcode);
@@ -1343,7 +1369,11 @@ fn resolve_method_ref(node: MethodInsnNode, cp: &mut ConstantPoolBuilder) -> (u1
             name,
             descriptor,
         } => {
-            let index = cp.method_ref(&owner, &name, &descriptor);
+            let index = if node.insn.opcode == opcodes::INVOKEINTERFACE {
+                cp.interface_method_ref(&owner, &name, &descriptor)
+            } else {
+                cp.method_ref(&owner, &name, &descriptor)
+            };
             (
                 index,
                 MethodInsnNode {
@@ -1353,6 +1383,24 @@ fn resolve_method_ref(node: MethodInsnNode, cp: &mut ConstantPoolBuilder) -> (u1
             )
         }
     }
+}
+
+fn method_ref_interface_count(method_ref: &MemberRef) -> u8 {
+    let descriptor = match method_ref {
+        MemberRef::Symbolic { descriptor, .. } => descriptor.as_str(),
+        MemberRef::Index(_) => return 1,
+    };
+    let Ok((args, _ret)) = parse_method_descriptor(descriptor) else {
+        return 1;
+    };
+    let mut count = 1u16; // include receiver
+    for arg in args {
+        count += match arg {
+            FieldType::Long | FieldType::Double => 2,
+            _ => 1,
+        };
+    }
+    count.min(u8::MAX as u16) as u8
 }
 
 fn resolve_ldc(node: LdcInsnNode, cp: &mut ConstantPoolBuilder) -> (u8, u16, LdcInsnNode) {
@@ -1468,6 +1516,8 @@ impl ClassFileWriter {
         write_u2(&mut out, class_node.major_version);
 
         let mut class_attributes = class_node.attributes.clone();
+        let mut methods = class_node.methods.clone();
+        resolve_invokedynamic_methods(&mut methods, &mut cp, &mut class_attributes);
         if let Some(source_file) = &class_node.source_file {
             class_attributes.retain(|attr| !matches!(attr, AttributeInfo::SourceFile { .. }));
             let source_index = ensure_utf8(&mut cp, source_file);
@@ -1481,7 +1531,7 @@ impl ClassFileWriter {
         for field in &class_node.fields {
             collect_attribute_names(&field.attributes, &mut attribute_names);
         }
-        for method in &class_node.methods {
+        for method in &methods {
             collect_attribute_names(&method.attributes, &mut attribute_names);
             if method.has_code {
                 attribute_names.push("Code".to_string());
@@ -1491,20 +1541,20 @@ impl ClassFileWriter {
         for name in attribute_names {
             ensure_utf8(&mut cp, &name);
         }
-        for method in &class_node.methods {
+        for method in &methods {
             ensure_utf8(&mut cp, &method.name);
             ensure_utf8(&mut cp, &method.descriptor);
         }
 
         let mut precomputed_stack_maps: Vec<Option<Vec<StackMapFrame>>> =
-            Vec::with_capacity(class_node.methods.len());
+            Vec::with_capacity(methods.len());
         let mut precomputed_maxs: Vec<Option<(u16, u16)>> =
-            Vec::with_capacity(class_node.methods.len());
+            Vec::with_capacity(methods.len());
         let compute_frames = self.options & COMPUTE_FRAMES != 0;
         let compute_maxs_flag = self.options & COMPUTE_MAXS != 0;
         if compute_frames {
             ensure_utf8(&mut cp, "StackMapTable");
-            for method in &class_node.methods {
+            for method in &methods {
                 if method.has_code {
                     let code = method_code_attribute(method)?;
                     let maxs = if compute_maxs_flag {
@@ -1523,7 +1573,7 @@ impl ClassFileWriter {
                 }
             }
         } else if compute_maxs_flag {
-            for method in &class_node.methods {
+            for method in &methods {
                 if method.has_code {
                     let code = method_code_attribute(method)?;
                     precomputed_maxs.push(Some(compute_maxs(method, class_node, &code, &cp)?));
@@ -1531,10 +1581,10 @@ impl ClassFileWriter {
                     precomputed_maxs.push(None);
                 }
             }
-            precomputed_stack_maps.resize(class_node.methods.len(), None);
+            precomputed_stack_maps.resize(methods.len(), None);
         } else {
-            precomputed_stack_maps.resize(class_node.methods.len(), None);
-            precomputed_maxs.resize(class_node.methods.len(), None);
+            precomputed_stack_maps.resize(methods.len(), None);
+            precomputed_maxs.resize(methods.len(), None);
         }
 
         let super_class = match class_node.super_name.as_deref() {
@@ -1562,8 +1612,8 @@ impl ClassFileWriter {
             write_field(&mut out, field, &mut cp)?;
         }
 
-        write_u2(&mut out, class_node.methods.len() as u16);
-        for (index, method) in class_node.methods.iter().enumerate() {
+        write_u2(&mut out, methods.len() as u16);
+        for (index, method) in methods.iter().enumerate() {
             let stack_map = precomputed_stack_maps
                 .get(index)
                 .and_then(|item| item.as_ref());
@@ -2114,6 +2164,313 @@ fn ensure_class(cp: &mut Vec<CpInfo>, name: &str) -> u16 {
     let name_index = ensure_utf8(cp, name);
     cp.push(CpInfo::Class { name_index });
     (cp.len() - 1) as u16
+}
+
+fn ensure_name_and_type(cp: &mut Vec<CpInfo>, name: &str, descriptor: &str) -> u16 {
+    let name_index = ensure_utf8(cp, name);
+    let descriptor_index = ensure_utf8(cp, descriptor);
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::NameAndType {
+            name_index: existing_name,
+            descriptor_index: existing_desc,
+        } = entry
+            && *existing_name == name_index
+            && *existing_desc == descriptor_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::NameAndType {
+        name_index,
+        descriptor_index,
+    });
+    (cp.len() - 1) as u16
+}
+
+fn ensure_string(cp: &mut Vec<CpInfo>, value: &str) -> u16 {
+    let string_index = ensure_utf8(cp, value);
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::String {
+            string_index: existing,
+        } = entry
+            && *existing == string_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::String { string_index });
+    (cp.len() - 1) as u16
+}
+
+fn ensure_method_type(cp: &mut Vec<CpInfo>, descriptor: &str) -> u16 {
+    let descriptor_index = ensure_utf8(cp, descriptor);
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::MethodType {
+            descriptor_index: existing,
+        } = entry
+            && *existing == descriptor_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::MethodType { descriptor_index });
+    (cp.len() - 1) as u16
+}
+
+fn ensure_field_ref(cp: &mut Vec<CpInfo>, owner: &str, name: &str, descriptor: &str) -> u16 {
+    let class_index = ensure_class(cp, owner);
+    let name_and_type_index = ensure_name_and_type(cp, name, descriptor);
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::Fieldref {
+            class_index: existing_class,
+            name_and_type_index: existing_nt,
+        } = entry
+            && *existing_class == class_index
+            && *existing_nt == name_and_type_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::Fieldref {
+        class_index,
+        name_and_type_index,
+    });
+    (cp.len() - 1) as u16
+}
+
+fn ensure_method_ref(cp: &mut Vec<CpInfo>, owner: &str, name: &str, descriptor: &str) -> u16 {
+    let class_index = ensure_class(cp, owner);
+    let name_and_type_index = ensure_name_and_type(cp, name, descriptor);
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::Methodref {
+            class_index: existing_class,
+            name_and_type_index: existing_nt,
+        } = entry
+            && *existing_class == class_index
+            && *existing_nt == name_and_type_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::Methodref {
+        class_index,
+        name_and_type_index,
+    });
+    (cp.len() - 1) as u16
+}
+
+fn ensure_interface_method_ref(
+    cp: &mut Vec<CpInfo>,
+    owner: &str,
+    name: &str,
+    descriptor: &str,
+) -> u16 {
+    let class_index = ensure_class(cp, owner);
+    let name_and_type_index = ensure_name_and_type(cp, name, descriptor);
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::InterfaceMethodref {
+            class_index: existing_class,
+            name_and_type_index: existing_nt,
+        } = entry
+            && *existing_class == class_index
+            && *existing_nt == name_and_type_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::InterfaceMethodref {
+        class_index,
+        name_and_type_index,
+    });
+    (cp.len() - 1) as u16
+}
+
+fn ensure_method_handle(cp: &mut Vec<CpInfo>, handle: &Handle) -> u16 {
+    let reference_index = match handle.reference_kind {
+        1..=4 => ensure_field_ref(cp, &handle.owner, &handle.name, &handle.descriptor),
+        9 => ensure_interface_method_ref(cp, &handle.owner, &handle.name, &handle.descriptor),
+        _ => ensure_method_ref(cp, &handle.owner, &handle.name, &handle.descriptor),
+    };
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::MethodHandle {
+            reference_kind,
+            reference_index: existing_index,
+        } = entry
+            && *reference_kind == handle.reference_kind
+            && *existing_index == reference_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::MethodHandle {
+        reference_kind: handle.reference_kind,
+        reference_index,
+    });
+    (cp.len() - 1) as u16
+}
+
+fn ensure_int(cp: &mut Vec<CpInfo>, value: i32) -> u16 {
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::Integer(existing) = entry
+            && *existing == value
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::Integer(value));
+    (cp.len() - 1) as u16
+}
+
+fn ensure_float(cp: &mut Vec<CpInfo>, value: f32) -> u16 {
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::Float(existing) = entry
+            && existing.to_bits() == value.to_bits()
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::Float(value));
+    (cp.len() - 1) as u16
+}
+
+fn ensure_long(cp: &mut Vec<CpInfo>, value: i64) -> u16 {
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::Long(existing) = entry
+            && *existing == value
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::Long(value));
+    cp.push(CpInfo::Unusable);
+    (cp.len() - 2) as u16
+}
+
+fn ensure_double(cp: &mut Vec<CpInfo>, value: f64) -> u16 {
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::Double(existing) = entry
+            && existing.to_bits() == value.to_bits()
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::Double(value));
+    cp.push(CpInfo::Unusable);
+    (cp.len() - 2) as u16
+}
+
+fn ensure_bootstrap_arg(cp: &mut Vec<CpInfo>, arg: &BootstrapArgument) -> u16 {
+    match arg {
+        BootstrapArgument::Integer(value) => ensure_int(cp, *value),
+        BootstrapArgument::Float(value) => ensure_float(cp, *value),
+        BootstrapArgument::Long(value) => ensure_long(cp, *value),
+        BootstrapArgument::Double(value) => ensure_double(cp, *value),
+        BootstrapArgument::String(value) => ensure_string(cp, value),
+        BootstrapArgument::Class(value) => ensure_class(cp, value),
+        BootstrapArgument::MethodType(value) => ensure_method_type(cp, value),
+        BootstrapArgument::Handle(value) => ensure_method_handle(cp, value),
+    }
+}
+
+fn ensure_bootstrap_method(
+    class_attributes: &mut Vec<AttributeInfo>,
+    cp: &mut Vec<CpInfo>,
+    bootstrap_method: &Handle,
+    bootstrap_args: &[BootstrapArgument],
+) -> u16 {
+    let bootstrap_method_ref = ensure_method_handle(cp, bootstrap_method);
+    let mut bootstrap_arguments = Vec::with_capacity(bootstrap_args.len());
+    for arg in bootstrap_args {
+        bootstrap_arguments.push(ensure_bootstrap_arg(cp, arg));
+    }
+
+    let attr_pos = if let Some(index) = class_attributes
+        .iter()
+        .position(|attr| matches!(attr, AttributeInfo::BootstrapMethods { .. }))
+    {
+        index
+    } else {
+        class_attributes.push(AttributeInfo::BootstrapMethods {
+            methods: Vec::new(),
+        });
+        class_attributes.len() - 1
+    };
+
+    if let Some(AttributeInfo::BootstrapMethods { methods }) = class_attributes.get_mut(attr_pos) {
+        if let Some(index) = methods.iter().position(|entry| {
+            entry.bootstrap_method_ref == bootstrap_method_ref
+                && entry.bootstrap_arguments == bootstrap_arguments
+        }) {
+            return index as u16;
+        }
+        methods.push(BootstrapMethod {
+            bootstrap_method_ref,
+            bootstrap_arguments,
+        });
+        (methods.len() - 1) as u16
+    } else {
+        0
+    }
+}
+
+fn ensure_invoke_dynamic(
+    cp: &mut Vec<CpInfo>,
+    bootstrap_method_attr_index: u16,
+    name: &str,
+    descriptor: &str,
+) -> u16 {
+    let name_and_type_index = ensure_name_and_type(cp, name, descriptor);
+    for (index, entry) in cp.iter().enumerate() {
+        if let CpInfo::InvokeDynamic {
+            bootstrap_method_attr_index: existing_bsm,
+            name_and_type_index: existing_nt,
+        } = entry
+            && *existing_bsm == bootstrap_method_attr_index
+            && *existing_nt == name_and_type_index
+        {
+            return index as u16;
+        }
+    }
+    cp.push(CpInfo::InvokeDynamic {
+        bootstrap_method_attr_index,
+        name_and_type_index,
+    });
+    (cp.len() - 1) as u16
+}
+
+fn resolve_invokedynamic_methods(
+    methods: &mut [MethodNode],
+    cp: &mut Vec<CpInfo>,
+    class_attributes: &mut Vec<AttributeInfo>,
+) {
+    for method in methods {
+        let mut resolved = InsnList::new();
+        for insn in method.instructions.insns().iter().cloned() {
+            let insn = match insn {
+                Insn::InvokeDynamic(mut node) => {
+                    if node.method_index == 0
+                        && let (Some(name), Some(descriptor), Some(bootstrap_method)) = (
+                            node.name.as_ref(),
+                            node.descriptor.as_ref(),
+                            node.bootstrap_method.as_ref(),
+                        )
+                    {
+                        let bsm_index = ensure_bootstrap_method(
+                            class_attributes,
+                            cp,
+                            bootstrap_method,
+                            &node.bootstrap_args,
+                        );
+                        node.method_index = ensure_invoke_dynamic(cp, bsm_index, name, descriptor);
+                    }
+                    Insn::InvokeDynamic(node)
+                }
+                other => other,
+            };
+            resolved.add(insn);
+        }
+        method.instructions = resolved;
+    }
 }
 
 fn cp_find_utf8(cp: &[CpInfo], value: &str) -> Option<u16> {
@@ -3870,6 +4227,8 @@ fn read_i4(code: &[u8], pos: &mut usize) -> Result<i32, ClassWriteError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::class_reader::ClassReader;
+    use crate::insn::InvokeDynamicInsnNode;
     use crate::opcodes;
 
     #[test]
