@@ -1,4 +1,5 @@
-use crate::class_reader::{AttributeInfo, CpInfo, ExceptionTableEntry};
+use crate::class_reader::{AttributeInfo, ExceptionTableEntry};
+use crate::constant_pool::CpInfo;
 use crate::insn::InsnList;
 
 /// Represents a parsed Java Class File.

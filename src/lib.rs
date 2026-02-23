@@ -8,3 +8,4 @@ pub mod macros;
 pub mod nodes;
 pub mod opcodes;
 pub mod types;
+pub mod constant_pool;
